@@ -2,22 +2,23 @@
 
 ## 1. 工具用途
 
-本工具用于按照 PRD 驱动一次完整代码迭代，并强制执行以下流程：
+本工具可从现有 PRD 或自然语言需求启动一次完整代码迭代，并强制执行以下流程：
 
-1. 技术方案设计与人工审核。
-2. 代码修改方案设计与人工审核。
-3. 测试方案设计与人工审核。
-4. 按批准方案实施代码变更。
-5. 编写并执行测试；失败时退回代码实施阶段。
-6. 测试全部通过后生成迭代总结、评分和改进项。
+1. 创建或补齐候选 PRD，并由用户人工审核。
+2. 技术方案设计与人工审核。
+3. 代码修改方案设计与人工审核。
+4. 测试方案设计与人工审核。
+5. 按批准方案实施代码变更。
+6. 编写并执行测试；失败时退回代码实施阶段。
+7. 测试全部通过后生成迭代总结、评分和改进项。
 
-任何 Agent 都不能代替人工通过前三个审核闸门。所有文档、审核意见、Git 证据和测试结果均保存在同一个 Harnove 目录中。
+任何 Agent 都不能代替用户通过 PRD 及后续人工审核闸门。所有文档、审核意见、Git 证据和测试结果均保存在同一个 Harnove 目录中。
 
 ## 2. 环境要求
 
 - Python 3.10 或更高版本。
 - 目标项目应使用 Git；没有可用 Git 仓库时仍能运行，但只能生成 Git 不可用记录。
-- PRD 必须是本地可读取文件。
+- 初始输入必须是本地可读取的 PRD，或一段非空的自然语言需求描述。
 - Windows 用户可以使用 `run.ps1`；macOS/Linux 用户直接运行 Python 脚本。
 
 ## 3. 放入项目
@@ -86,9 +87,18 @@ python harnove/init.py --project . --archive-dir iteration-records
 并严格按照该流程，基于 docs/prd/order-refund.md 启动 ITER-20260720-001 迭代。
 ```
 
+也可以直接描述需求：
+
+```text
+/harnove 启动 ITER-20260720-002，需求名 order-export：
+在订单列表增加批量导出。请先把我的描述整理为候选 PRD；不明确的边界先问我。
+```
+
 如果工具放在 `tools/` 下，应使用实际路径。Agent 必须先确认 `config.json` 存在，不能自行跳过项目初始化。
 
 ## 6. 启动一次迭代
+
+### 6.1 使用现有 PRD
 
 Windows：
 
@@ -108,7 +118,11 @@ python harnove/runtime/harnove.py init \
   --prd docs/prd/order-refund.md
 ```
 
-工具会复制 PRD、记录 SHA-256 和 Git 基线，并创建如下迭代目录：
+工具会只读复制原始 PRD、记录 SHA-256，并另外创建一份候选 PRD。Agent 可以在
+候选文档中补充形成明确范围和验收标准所必需的信息，但必须注明补充依据和原因，
+不得修改源 PRD 或归档的原始副本。现有 PRD 同样需要经过 PRD 人工审核后才能继续。
+
+随后会创建如下迭代目录：
 
 ```text
 harnove/iterations/
@@ -126,6 +140,77 @@ harnove/iterations/
 
 命令输出会给出当前需要填写的文档路径。
 
+### 6.2 使用自然语言描述
+
+短描述可直接传入：
+
+```powershell
+.\harnove\run.ps1 init `
+  --iteration-id ITER-20260720-002 `
+  --requirement order-export `
+  --description "在订单列表增加批量导出，但格式和数量上限还没确定。"
+```
+
+较长描述建议放入文本文件，避免命令行转义问题：
+
+```powershell
+.\harnove\run.ps1 init `
+  --iteration-id ITER-20260720-002 `
+  --requirement order-export `
+  --description-file .\requirements\order-export.txt
+```
+
+此模式首先进入 `prd_intake`。Agent 会保留原始输入，创建一份带稳定
+`REQ-xxx` 编号的候选 PRD，并把会影响范围、设计或验收的模糊边界列入
+“待确认问题”。如果仍需确认，Agent 提交：
+
+```powershell
+.\harnove\run.ps1 submit `
+  --archive <迭代目录> `
+  --result needs-clarification
+```
+
+用户回答后，把原始回答归档并生成下一版候选 PRD：
+
+```powershell
+.\harnove\run.ps1 clarify `
+  --archive <迭代目录> `
+  --responder "产品负责人" `
+  --response "导出 CSV；单次最多 10,000 条。"
+```
+
+Agent 根据回答修订新版本。如仍有关键歧义则继续询问；全部边界明确后，将
+状态标记改为 `PRD_STATUS: READY`，并在“待确认问题”中写
+`无（边界已确认）`，然后执行：
+
+```powershell
+.\harnove\run.ps1 submit --archive <迭代目录> --result ready
+```
+
+此时状态进入 `awaiting_prd_review`，不会自动进入技术设计。用户必须审核完整
+候选 PRD：
+
+```powershell
+.\harnove\run.ps1 review `
+  --archive <迭代目录> `
+  --decision approve `
+  --reviewer "产品负责人"
+```
+
+如果不通过，必须给出修改建议：
+
+```powershell
+.\harnove\run.ps1 review `
+  --archive <迭代目录> `
+  --decision reject `
+  --reviewer "产品负责人" `
+  --feedback "REQ-003 需要补充无权限用户的处理边界"
+```
+
+驳回会保留被审核版本和审核记录，并生成下一版候选 PRD。Agent 按反馈修改后
+重新提交，直到用户批准。只有批准版本才会冻结为后续技术方案、代码方案、测试
+及实施的需求基线。原始输入、所有候选版本及用户补充均保留在 `00-input/` 中。
+
 ## 7. 查看当前状态
 
 ```powershell
@@ -135,6 +220,8 @@ harnove/iterations/
 主要状态：
 
 - `drafting`：当前角色应填写指定文档。
+- `awaiting_user_clarification`：候选 PRD 等待用户补齐边界，不能进入技术设计。
+- `awaiting_prd_review`：候选 PRD 等待用户正式审批，Agent 不得自行通过。
 - `awaiting_human_review`：等待人工审批，Agent 必须停止推进。
 - `complete`：测试通过且总结已经归档。
 
@@ -182,7 +269,7 @@ harnove/iterations/
 
 ## 10. 代码实施和 Git 证据
 
-前三个闸门全部批准后，代码专家才能修改业务代码。完成代码修改记录后执行普通 `submit`。
+PRD、技术方案、代码方案和测试方案四个闸门全部批准后，代码专家才能修改业务代码。完成代码修改记录后执行普通 `submit`。
 
 工具会自动归档：
 
@@ -322,7 +409,7 @@ python harnove/scripts/package_self_test.py
 ```powershell
 python harnove/scripts/export_package.py `
   --source harnove `
-  --output releases/harnove-2.1.0
+  --output releases/harnove-2.3.0
 ```
 
 输出目录必须不存在或为空。打包器只复制核心白名单文件，因此未知项目文件也不会被误带入。输出中的 `package-build.json` 记录版本、配置 Schema 和所有发行文件的 SHA-256，可用于交付校验。

@@ -9,7 +9,7 @@ Distinguish facts, PRD statements, code observations, assumptions, and open ques
 The archive layout is fixed:
 
 ```text
-00-input/              PRD snapshot and requirement baseline
+00-input/              Original input, PRD versions, clarifications, and requirement baseline
 01-technical-design/   technical solution versions
 02-code-plan/          code-change plan versions
 03-test-design/        test design versions
@@ -21,6 +21,20 @@ state.json             workflow state and history
 ```
 
 ## Required content
+
+### Temporary PRD intake
+
+For either an existing PRD or natural-language description, preserve the original input
+verbatim and create a separate versioned candidate PRD. Never edit the original. Include
+original description, goals/background, users/scenarios,
+functional requirements with stable IDs, non-functional requirements, in-scope and
+out-of-scope boundaries, acceptance criteria, constraints/dependencies, open questions, and
+user clarification history. Record each addition or modification with its source, reason,
+and confirmation state. Use `PRD_STATUS: NEEDS_CLARIFICATION` while material ambiguity
+remains and `PRD_STATUS: READY` only when `待确认问题` explicitly says `无（边界已确认）`.
+Every clarification and rejection is immutable and produces a new PRD version. A ready PRD
+must receive explicit human approval; only the approved version and hash become the
+authoritative downstream scope baseline.
 
 ### Technical design
 

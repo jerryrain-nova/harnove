@@ -1,6 +1,6 @@
 {
   "name": "harnove",
-  "version": "2.1.0",
+  "version": "2.3.0",
   "config_schema_version": 1,
   "core_files": [
     "harnove-package.json",
