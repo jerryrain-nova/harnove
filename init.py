@@ -112,22 +112,27 @@ def main() -> None:
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc
 
-    archive_root = (install_root / args.archive_dir).resolve()
-    try:
-        archive_root.relative_to(install_root)
-    except ValueError as exc:
-        raise SystemExit("--archive-dir 必须位于 Harnove 统一目录内") from exc
-    archive_root.mkdir(parents=True, exist_ok=True)
-    keep = archive_root / ".gitkeep"
-    keep.touch(exist_ok=True)
-
-    if not config_path.exists():
+    config_changed = False
+    if config_path.exists():
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        if "improve_root" not in config:
+            config["improve_root"] = "improve"
+            config_changed = True
+        gates = config.setdefault("required_human_gates", [])
+        if "prd_intake" not in gates:
+            gates.insert(0, "prd_intake")
+            config_changed = True
+        if config.get("schema_version", 1) < 2:
+            config["schema_version"] = 2
+            config_changed = True
+    else:
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config = {
-            "schema_version": 1,
+            "schema_version": 2,
             "project_root": relative_or_absolute(project, install_root),
             "repo_root": ".",
-            "archive_root": relative_or_absolute(archive_root, install_root),
+            "archive_root": args.archive_dir,
+            "improve_root": "improve",
             "skill": f"skill/{SKILL_NAME}",
             "platform_entrypoints": {
                 "codex": f".agents/skills/{SKILL_NAME}",
@@ -136,8 +141,20 @@ def main() -> None:
             },
             "scope_policy": "prd_only",
             "test_pass_policy": "all_mandatory_cases_pass",
-            "required_human_gates": ["technical_design", "code_plan", "test_design"],
+            "required_human_gates": ["prd_intake", "technical_design", "code_plan", "test_design"],
         }
+        config_changed = True
+
+    archive_root = (install_root / config.get("archive_root", "iterations")).resolve()
+    improve_root = (install_root / config.get("improve_root", "improve")).resolve()
+    for label, managed_root in [("archive_root", archive_root), ("improve_root", improve_root)]:
+        try:
+            managed_root.relative_to(install_root)
+        except ValueError as exc:
+            raise SystemExit(f"{label} 必须位于 Harnove 统一目录内") from exc
+        managed_root.mkdir(parents=True, exist_ok=True)
+        (managed_root / ".gitkeep").touch(exist_ok=True)
+    if config_changed:
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     manifest = {
@@ -154,8 +171,10 @@ def main() -> None:
     print(f"项目 Skill: {install_root / 'skill' / SKILL_NAME}")
     print("平台入口: Claude Code /harnove; Cursor /harnove; Codex $harnove 或 /skills")
     print(f"迭代归档: {archive_root}")
+    print(f"经验沉淀: {improve_root}")
     print(f"使用文档: {install_root / 'USAGE.md'}")
-    print(f"下一步: {install_root / 'run.ps1'} init --iteration-id <ID> --requirement <名称> --prd <PRD路径>")
+    print(f"下一步: {install_root / 'run.ps1'} init --iteration-id <ID> --requirement <名称> (--prd <路径> | --description <描述>)")
+    print("运行后由主 Agent 为每个环节派发全新的隔离子 Agent。")
 
 
 if __name__ == "__main__":

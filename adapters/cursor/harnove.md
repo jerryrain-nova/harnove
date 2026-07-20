@@ -9,6 +9,11 @@ Locate the project Harnove directory by finding its `config.json` (normally
 `skill/harnove/SKILL.md` under that directory and its referenced artifact contract completely,
 then follow it as authoritative instructions for this request.
 
+Remain orchestration-only. For every stage/version, use Cursor's native subagent mechanism to
+create a fresh child from the Harnove work order; never author the artifact or product change
+in the main Agent. If subagents are unavailable, stop and report that Harnove cannot safely
+advance. Keep all iteration and experience data under the discovered Harnove directory.
+
 Treat any text supplied after `/harnove` as either a PRD path or a natural-language iteration
 request. Preserve any supplied PRD as immutable, create a separate candidate PRD, and require
 explicit user approval of that candidate before technical design. If no usable input is supplied, report current status when an archive is identifiable;
