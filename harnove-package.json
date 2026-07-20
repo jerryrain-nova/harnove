@@ -1,0 +1,31 @@
+{
+  "name": "harnove",
+  "version": "2.1.0",
+  "config_schema_version": 1,
+  "core_files": [
+    "harnove-package.json",
+    "harnove.config.example.json",
+    "init.py",
+    "run.ps1",
+    "SKILL.md",
+    "USAGE.md",
+    "agents/openai.yaml",
+    "adapters/cursor/harnove.md",
+    "references/artifact-contracts.md",
+    "scripts/harnove.py",
+    "scripts/export_package.py",
+    "scripts/self_test.py",
+    "scripts/install_self_test.py",
+    "scripts/package_self_test.py"
+  ],
+  "project_owned_paths": [
+    "config.json",
+    "install-manifest.json",
+    "runtime/",
+    "skill/",
+    "iterations/",
+    ".agents/skills/harnove/",
+    ".claude/skills/harnove/",
+    ".cursor/commands/harnove.md"
+  ]
+}

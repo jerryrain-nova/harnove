@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "project_root": "..",
+  "repo_root": ".",
+  "archive_root": "iterations",
+  "skill": "skill/harnove",
+  "platform_entrypoints": {
+    "codex": ".agents/skills/harnove",
+    "cursor": ".cursor/commands/harnove.md",
+    "claude_code": ".claude/skills/harnove"
+  },
+  "required_human_gates": [
+    "technical_design",
+    "code_plan",
+    "test_design"
+  ],
+  "requirement_id_pattern": "REQ-[0-9]{3}",
+  "test_pass_policy": "all_mandatory_cases_pass",
+  "scope_policy": "prd_only"
+}
