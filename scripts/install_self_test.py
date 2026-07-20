@@ -32,6 +32,11 @@ def main() -> None:
         run(str(plugin / "init.py"), "--project", str(project))
         config = json.loads((project / ".harnove" / "config.json").read_text(encoding="utf-8"))
         assert config["archive_root"] == "iterations"
+        assert config["improve_root"] == "improve"
+        assert (project / ".harnove" / "iterations").is_dir()
+        assert (project / ".harnove" / "improve").is_dir()
+        assert not (project / "iterations").exists()
+        assert not (project / "improve").exists()
         assert (project / ".harnove" / "skill" / "harnove" / "SKILL.md").is_file()
         assert (project / ".harnove" / "runtime" / "harnove.py").is_file()
         assert (project / ".agents" / "skills" / "harnove" / "SKILL.md").is_file()
@@ -73,11 +78,28 @@ def main() -> None:
         assert (copied_plugin / "runtime" / "harnove.py").is_file()
         assert (copied_plugin / "skill" / "harnove" / "SKILL.md").is_file()
         assert (copied_plugin / "iterations").is_dir()
+        assert (copied_plugin / "improve").is_dir()
         assert not (copied_project / ".harnove").exists()
         assert (copied_project / ".agents" / "skills" / "harnove" / "SKILL.md").is_file()
         assert (copied_project / ".claude" / "skills" / "harnove" / "SKILL.md").is_file()
         assert (copied_project / ".cursor" / "commands" / "harnove.md").is_file()
         assert not (copied_project / "docs").exists()
+        copied_prd = copied_project / "copied-prd.md"
+        copied_prd.write_text("# PRD\n\nREQ-001：原位安装归档验证。\n", encoding="utf-8")
+        run(str(copied_plugin / "runtime" / "harnove.py"), "init", "--iteration-id", "ITER-INPLACE",
+            "--requirement", "archive-location", "--prd", str(copied_prd), cwd=copied_project)
+        assert len(list((copied_plugin / "iterations").glob("*_ITER-INPLACE_archive-location"))) == 1
+        assert not (copied_project / "iterations").exists()
+        assert not (copied_project / "improve").exists()
+
+        # Unsafe owner configuration fails closed instead of writing outside Harnove.
+        bad_config = json.loads((copied_plugin / "config.json").read_text(encoding="utf-8"))
+        bad_config["archive_root"] = "../outside-iterations"
+        (copied_plugin / "config.json").write_text(json.dumps(bad_config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        result = run(str(copied_plugin / "runtime" / "harnove.py"), "status", "--archive", "missing", cwd=copied_project, ok=False)
+        assert result.returncode != 0
+        output = result.stdout + result.stderr
+        assert "archive_root" in output and "improve_root" in output, output
     print("install self-test passed")
 
 

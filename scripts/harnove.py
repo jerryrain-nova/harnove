@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 STAGES = ["prd_intake", "technical_design", "code_plan", "test_design", "implementation", "test_execution", "summary"]
@@ -36,12 +37,12 @@ CN_NAMES = {
 }
 REQUIRED_SECTIONS = {
     "prd_intake": ["原始需求描述", "目标与背景", "用户与场景", "功能需求", "非功能需求", "范围内", "范围外", "验收标准", "约束与依赖", "信息补充记录", "待确认问题", "用户补充记录"],
-    "technical_design": ["需求依据", "目标与非目标", "现状分析", "技术方案", "风险", "回滚", "追溯矩阵"],
-    "code_plan": ["需求依据", "改动范围", "改动细则", "改动原因", "禁止改动", "追溯矩阵"],
+    "technical_design": ["需求依据", "目标与非目标", "现状分析", "技术方案", "架构与流程图", "风险", "回滚", "追溯矩阵"],
+    "code_plan": ["需求依据", "改动范围", "改动细则", "改动关系图", "改动原因", "禁止改动", "追溯矩阵"],
     "test_design": ["需求依据", "覆盖策略", "测试用例", "测试目的", "覆盖矩阵"],
     "implementation": ["需求依据", "批准基线", "实际改动", "Git 证据", "方案偏差"],
     "test_execution": ["需求依据", "实际变更审查", "可执行测试", "执行结果", "结论"],
-    "summary": ["需求背景", "迭代内容", "测试结论", "追溯矩阵", "环节评分", "亮点", "缺点", "改进项"],
+    "summary": ["需求背景", "迭代内容", "测试结论", "追溯矩阵", "环节评分", "亮点", "缺点", "根因", "经验总结", "下次复用规则", "改进项"],
 }
 PLACEHOLDER = "<!-- 待填写；所有判断须引用 REQ-xxx 或代码证据。 -->"
 
@@ -63,29 +64,63 @@ def safe_name(value: str) -> str:
     return value.strip("-._") or "requirement"
 
 
-def project_defaults() -> tuple[str, str]:
+def inside(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def project_defaults() -> tuple[str, str, str, str]:
+    runtime_home = Path(__file__).resolve().parent.parent
+    direct = runtime_home / "config.json"
     starts = [Path.cwd().resolve(), Path(__file__).resolve().parent]
     seen = set()
+    candidates = [direct]
     for start in starts:
         for candidate in [start, *start.parents]:
             if candidate in seen:
                 continue
             seen.add(candidate)
-            config_path = candidate / ".harnove" / "config.json"
-            if not config_path.is_file():
-                continue
-            config = json.loads(config_path.read_text(encoding="utf-8"))
-            home = config_path.parent
-            project = (home / config.get("project_root", "..")).resolve()
-            return str((project / config.get("repo_root", ".")).resolve()), str((home / config.get("archive_root", "iterations")).resolve())
-    return ".", "iterations"
+            candidates += [candidate / "harnove" / "config.json", candidate / ".harnove" / "config.json"]
+    for config_path in candidates:
+        if not config_path.is_file() or config_path.parent.name not in {"harnove", ".harnove"}:
+            continue
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        home = config_path.parent.resolve()
+        project = (home / config.get("project_root", "..")).resolve()
+        repo = (project / config.get("repo_root", ".")).resolve()
+        archive = (home / config.get("archive_root", "iterations")).resolve()
+        improve = (home / config.get("improve_root", "improve")).resolve()
+        if not inside(archive, home) or not inside(improve, home):
+            raise SystemExit("config.json 中的 archive_root 和 improve_root 必须位于 Harnove 目录内")
+        return str(repo), str(archive), str(improve), str(home)
+    fallback_home = Path.cwd().resolve()
+    return ".", str(fallback_home / "iterations"), str(fallback_home / "improve"), str(fallback_home)
 
 
 def load(archive: Path) -> dict:
     path = archive / "state.json"
     if not path.is_file():
         raise SystemExit(f"找不到状态文件: {path}")
-    return json.loads(path.read_text(encoding="utf-8"))
+    state = json.loads(path.read_text(encoding="utf-8"))
+    if state.get("schema_version", 1) < 4:
+        _, _, discovered_improve, discovered_home = project_defaults()
+        inferred_home = archive.parent.parent.resolve()
+        migration_home = Path(discovered_home) if inside(archive, Path(discovered_home)) else inferred_home
+        migration_improve = Path(discovered_improve) if inside(Path(discovered_improve), migration_home) else migration_home / "improve"
+        state.setdefault("harnove_home", str(migration_home))
+        state.setdefault("improve_root", str(migration_improve))
+        state.setdefault("used_agent_ids", [])
+        state.setdefault("history", []).append({"at": now(), "action": "schema_migration", "from": state.get("schema_version", 1), "to": 4})
+        if state.get("status") == "drafting":
+            state["status"] = "awaiting_dispatch"
+        state["schema_version"] = 4
+        if not state.get("improvement_index") and (archive / "00-input").is_dir():
+            state["improvement_index"] = create_improvement_context(archive, state)
+        save(archive, state)
+    return state
 
 
 def save(archive: Path, state: dict) -> None:
@@ -104,15 +139,20 @@ def git(repo: Path, *args: str) -> str | None:
 
 def capture_git_evidence(archive: Path, state: dict) -> list[str]:
     folder, version = archive / DIRS["implementation"], state["version"]
+    repo = Path(state["repo"]).resolve()
+    scope = ["--", "."]
+    for excluded in [Path(state["archive"]).parent, Path(state["improve_root"])]:
+        if inside(excluded, repo):
+            scope.append(f":(exclude){excluded.resolve().relative_to(repo).as_posix()}/**")
     commands = {
         f"git-head-v{version:03d}.txt": ("rev-parse", "HEAD"),
-        f"git-status-v{version:03d}.txt": ("status", "--short"),
-        f"git-diff-stat-v{version:03d}.txt": ("diff", "--stat", "--", "."),
-        f"git-diff-v{version:03d}.patch": ("diff", "--binary", "--", "."),
+        f"git-status-v{version:03d}.txt": ("status", "--short", *scope),
+        f"git-diff-stat-v{version:03d}.txt": ("diff", "--stat", *scope),
+        f"git-diff-v{version:03d}.patch": ("diff", "--binary", *scope),
     }
     written, unavailable = [], False
     for name, args in commands.items():
-        value = git(Path(state["repo"]), *args)
+        value = git(repo, *args)
         if value is None:
             unavailable = True
             continue
@@ -204,10 +244,13 @@ def template(state: dict, stage: str, version: int) -> str:
         f"- 迭代编号：{state['iteration_id']}", f"- 需求名称：{state['requirement']}",
         f"- 文档版本：v{version:03d}", f"- 角色：{CN_NAMES[stage]}", "- 状态：草稿",
         f"- PRD 快照：`00-input/{state['prd_snapshot']}`", f"- PRD SHA-256：`{state['prd_sha256']}`",
+        f"- 经验复用索引：`00-input/{state['improvement_index']}`",
         f"- 仓库基线：`{state.get('git_baseline') or 'GIT_UNAVAILABLE'}`", "",
     ]
     for section in REQUIRED_SECTIONS[stage]:
         lines += [f"## {section}", "", PLACEHOLDER, ""]
+        if section in {"架构与流程图", "改动关系图"}:
+            lines += ["DIAGRAM_STATUS: INCLUDED", "", "```mermaid", "flowchart LR", "  A[待细化输入] --> B[待细化处理]", "  B --> C[待细化输出]", "```", ""]
     return "\n".join(lines)
 
 
@@ -222,6 +265,22 @@ def validate_artifact(path: Path, stage: str) -> list[str]:
         errors.append("仍存在未填写的模板占位符")
     if len(text.strip()) < 500:
         errors.append("产物内容过短，无法形成可审核证据")
+    if stage in {"technical_design", "code_plan"}:
+        included = "DIAGRAM_STATUS: INCLUDED" in text
+        not_applicable = "DIAGRAM_STATUS: NOT_APPLICABLE" in text
+        if included == not_applicable:
+            errors.append("图示必须且只能声明 DIAGRAM_STATUS: INCLUDED 或 NOT_APPLICABLE")
+        elif included:
+            diagrams = re.findall(r"```mermaid\s*\n([\s\S]*?)```", text)
+            allowed = ("flowchart", "graph", "sequenceDiagram", "stateDiagram", "classDiagram", "erDiagram")
+            if not diagrams or not any(d.strip().startswith(allowed) for d in diagrams):
+                errors.append("INCLUDED 图示必须包含非空且类型受支持的 Mermaid 代码块")
+            if any("待细化" in d for d in diagrams):
+                errors.append("Mermaid 图仍包含待细化占位内容")
+        else:
+            reason = re.search(r"DIAGRAM_STATUS: NOT_APPLICABLE[\s\S]*?理由[:：]\s*([^\n]+)", text)
+            if not reason or len(reason.group(1).strip()) < 20:
+                errors.append("NOT_APPLICABLE 必须给出至少 20 字的具体理由")
     return errors
 
 
@@ -247,11 +306,49 @@ def advance(state: dict) -> None:
     state["stage"] = STAGES[STAGES.index(state["stage"]) + 1]
     state["version"] = state["stage_versions"].get(state["stage"], 0) + 1
     state["stage_versions"][state["stage"]] = state["version"]
-    state["status"] = "drafting"
+    state["status"] = "awaiting_dispatch"
+
+
+def create_improvement_context(archive: Path, state: dict) -> str:
+    improve_root = Path(state["improve_root"])
+    improve_root.mkdir(parents=True, exist_ok=True)
+    name = f"{state['iteration_id']}_{state['requirement']}_经验复用上下文.md"
+    target = archive / "00-input" / name
+    files = sorted(improve_root.glob("*.md"))
+    lines = [f"# {state['iteration_id']} {state['requirement']} - 历史经验复用上下文", "", "生成时快照，供本次所有子 Agent 读取；不得反向修改历史经验。", ""]
+    if not files:
+        lines += ["## 当前经验", "", "暂无历史经验。", ""]
+    for item in files:
+        lines += [f"## {item.name}", "", f"- SHA-256：`{digest(item)}`", "", item.read_text(encoding="utf-8"), ""]
+    target.write_text("\n".join(lines), encoding="utf-8")
+    return name
+
+
+def write_improvement(archive: Path, state: dict, summary: Path) -> Path:
+    improve_root = Path(state["improve_root"])
+    improve_root.mkdir(parents=True, exist_ok=True)
+    text = summary.read_text(encoding="utf-8")
+    base = f"{dt.date.today():%Y%m%d}_{state['iteration_id']}_{state['requirement']}_经验总结_v{state['version']:03d}.md"
+    target = improve_root / base
+    if target.exists():
+        target = improve_root / f"{target.stem}_{dt.datetime.now():%H%M%S%f}.md"
+    lines = [
+        f"# {state['iteration_id']} {state['requirement']} - 可复用经验", "",
+        f"- 来源归档：`{archive}`", f"- 来源总结：`{summary.relative_to(archive)}`",
+        f"- 来源 SHA-256：`{digest(summary)}`", f"- 沉淀时间：{now()}", "",
+    ]
+    for heading in ["环节评分", "亮点", "缺点", "根因", "经验总结", "下次复用规则", "改进项"]:
+        lines += [f"## {heading}", "", section_text(text, heading) or "未记录。", ""]
+    target.write_text("\n".join(lines), encoding="utf-8")
+    return target
 
 
 def cmd_init(a: argparse.Namespace) -> None:
     root, repo = Path(a.root).resolve(), Path(a.repo).resolve()
+    home = Path(getattr(a, "home", root.parent)).resolve()
+    improve_root = Path(getattr(a, "improve_root", home / "improve")).resolve()
+    if not inside(root, home) or not inside(improve_root, home):
+        raise SystemExit("迭代归档和 improve 必须位于 Harnove 自身目录内")
     prd_arg = getattr(a, "prd", None)
     description = getattr(a, "description", None)
     description_file = getattr(a, "description_file", None)
@@ -270,15 +367,17 @@ def cmd_init(a: argparse.Namespace) -> None:
     archive = root / f"{dt.date.today():%Y%m%d}_{ident}_{req}"
     if archive.exists():
         raise SystemExit(f"归档目录已存在: {archive}")
-    for folder in sorted(set(DIRS.values())) + ["reviews", "00-input/clarifications"]:
+    for folder in sorted(set(DIRS.values())) + ["reviews", "00-input/clarifications", "agent-runs"]:
         (archive / folder).mkdir(parents=True, exist_ok=True)
     baseline = git(repo, "rev-parse", "HEAD")
     state = {
-        "schema_version": 3, "iteration_id": ident, "requirement": req,
-        "archive": str(archive), "repo": str(repo), "git_baseline": baseline,
+        "schema_version": 4, "iteration_id": ident, "requirement": req,
+        "archive": str(archive), "repo": str(repo), "harnove_home": str(home),
+        "improve_root": str(improve_root), "git_baseline": baseline,
         "created_at": now(), "history": [], "approved": {}, "test_cycles": 0,
-        "stage_versions": {stage: 0 for stage in STAGES},
+        "stage_versions": {stage: 0 for stage in STAGES}, "used_agent_ids": [],
     }
+    state["improvement_index"] = create_improvement_context(archive, state)
 
     if prd_arg:
         prd = Path(prd_arg).resolve()
@@ -291,7 +390,7 @@ def cmd_init(a: argparse.Namespace) -> None:
             "prd_source_type": "existing_prd", "prd_source": str(prd),
             "original_input_snapshot": original, "original_input_sha256": digest(original_path),
             "prd_snapshot": None, "prd_sha256": None, "stage": "prd_intake",
-            "version": 1, "status": "drafting",
+            "version": 1, "status": "awaiting_dispatch",
         })
         state["stage_versions"]["prd_intake"] = 1
         target = artifact_path(archive, state)
@@ -307,20 +406,105 @@ def cmd_init(a: argparse.Namespace) -> None:
         state.update({
             "prd_source_type": "natural_language", "prd_source": source_name,
             "original_input_snapshot": source_name, "original_input_sha256": digest(source_path), "prd_snapshot": None,
-            "prd_sha256": None, "stage": "prd_intake", "version": 1, "status": "drafting",
+            "prd_sha256": None, "stage": "prd_intake", "version": 1, "status": "awaiting_dispatch",
         })
         state["stage_versions"]["prd_intake"] = 1
         target = artifact_path(archive, state)
         target.write_text(prd_template(state, description, 1), encoding="utf-8")
     save(archive, state)
     print(archive)
-    print(f"下一步: 填写 {target}")
+    print(f"待处理产物: {target}")
+    print("下一步: 主 Agent 创建全新子 Agent，并执行 dispatch 绑定该子 Agent。")
+
+
+def cmd_dispatch(a: argparse.Namespace) -> None:
+    archive, state = Path(a.archive).resolve(), load(Path(a.archive).resolve())
+    if state["status"] != "awaiting_dispatch":
+        raise SystemExit(f"当前状态 {state['status']} 不允许派发子 Agent")
+    if a.agent_id in state.get("used_agent_ids", []):
+        raise SystemExit("agent-id 已在本次迭代使用；每个环节/版本必须使用全新的子 Agent")
+    run_id = uuid.uuid4().hex
+    stage, version = state["stage"], state["version"]
+    work_order = {
+        "run_id": run_id, "agent_id": a.agent_id, "orchestrator": a.orchestrator,
+        "stage": stage, "version": version, "created_at": now(),
+        "artifact": str(artifact_path(archive, state)), "repo": state["repo"],
+        "prd_snapshot": state.get("prd_snapshot") or state.get("original_input_snapshot"),
+        "improvement_context": str(archive / "00-input" / state["improvement_index"]),
+        "approved_inputs": state.get("approved", {}),
+        "write_scope": "artifact_only" if stage not in {"implementation", "test_execution"} else "approved_repo_scope_and_artifact",
+        "rules": [
+            "只执行当前 stage/version，不执行状态机命令或人工审批",
+            "读取经验复用上下文并记录采用或不适用的经验",
+            "不得执行其他环节的工作，不得复用本次子 Agent 身份",
+        ],
+    }
+    runs = archive / "agent-runs"
+    order_path = runs / f"{stage}_v{version:03d}_{run_id}_work-order.json"
+    order_path.write_text(json.dumps(work_order, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    lease = runs / "active.lease"
+    try:
+        with lease.open("x", encoding="utf-8") as f:
+            json.dump(work_order, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+    except FileExistsError as exc:
+        order_path.unlink(missing_ok=True)
+        raise SystemExit("已有子 Agent 租约，拒绝并发派发") from exc
+    state["active_agent"] = {"run_id": run_id, "agent_id": a.agent_id, "work_order": str(order_path.relative_to(archive)), "started_at": now()}
+    state.setdefault("used_agent_ids", []).append(a.agent_id)
+    state["status"] = "subagent_working"
+    state["history"].append({"at": now(), "action": "subagent_dispatch", "stage": stage, "version": version, **state["active_agent"]})
+    save(archive, state)
+    print(json.dumps({"run_id": run_id, "work_order": str(order_path), "status": state["status"]}, ensure_ascii=False, indent=2))
+
+
+def close_agent_lease(archive: Path, run_id: str, result: str, record: dict) -> str:
+    lease = archive / "agent-runs" / "active.lease"
+    if not lease.is_file():
+        raise SystemExit("子 Agent 活跃租约缺失")
+    closed = archive / "agent-runs" / f"{run_id}_{result}.json"
+    closed.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    lease.unlink()
+    return str(closed.relative_to(archive))
+
+
+def cmd_agent_complete(a: argparse.Namespace) -> None:
+    archive, state = Path(a.archive).resolve(), load(Path(a.archive).resolve())
+    active = state.get("active_agent") or {}
+    if state["status"] != "subagent_working" or active.get("run_id") != a.run_id:
+        raise SystemExit("run-id 与当前活跃子 Agent 不匹配")
+    if not a.evidence.strip():
+        raise SystemExit("子 Agent 完成记录必须提供 --evidence")
+    record = {"at": now(), "action": "subagent_complete", "stage": state["stage"], "version": state["version"], "run_id": a.run_id, "agent_id": active["agent_id"], "result": a.result, "evidence": a.evidence.strip()}
+    record["record"] = close_agent_lease(archive, a.run_id, a.result, record)
+    state["history"].append(record)
+    state["last_agent_run"] = record
+    state.pop("active_agent", None)
+    state["status"] = "ready_for_submit" if a.result == "succeeded" else "awaiting_dispatch"
+    save(archive, state)
+    cmd_status(argparse.Namespace(archive=str(archive)))
+
+
+def cmd_abandon(a: argparse.Namespace) -> None:
+    a.result = "abandoned"
+    a.evidence = a.reason
+    cmd_agent_complete(a)
 
 
 def cmd_status(a: argparse.Namespace) -> None:
     archive, state = Path(a.archive).resolve(), load(Path(a.archive).resolve())
-    keys = ["iteration_id", "requirement", "prd_source_type", "stage", "version", "status", "test_cycles"]
-    print(json.dumps({k: state.get(k) for k in keys}, ensure_ascii=False, indent=2))
+    keys = ["iteration_id", "requirement", "prd_source_type", "stage", "version", "status", "test_cycles", "active_agent"]
+    payload = {k: state.get(k) for k in keys}
+    payload["next_action"] = {
+        "awaiting_dispatch": "spawn_fresh_subagent_then_dispatch",
+        "subagent_working": "monitor_subagent",
+        "ready_for_submit": "orchestrator_submit",
+        "awaiting_user_clarification": "ask_user_then_clarify",
+        "awaiting_prd_review": "human_review",
+        "awaiting_human_review": "human_review",
+        "complete": "none",
+    }.get(state["status"], "inspect_state")
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
     if state["status"] != "complete":
         print(f"产物: {artifact_path(archive, state)}")
 
@@ -357,9 +541,12 @@ def submit_prd_intake(archive: Path, state: dict, path: Path, result: str | None
 
 def cmd_submit(a: argparse.Namespace) -> None:
     archive, state = Path(a.archive).resolve(), load(Path(a.archive).resolve())
-    if state["status"] != "drafting":
+    if state["status"] != "ready_for_submit":
         raise SystemExit(f"当前状态 {state['status']} 不允许提交")
     stage, path = state["stage"], artifact_path(archive, state)
+    last_run = state.get("last_agent_run") or {}
+    if last_run.get("stage") != stage or last_run.get("version") != state["version"] or last_run.get("result") != "succeeded":
+        raise SystemExit("当前产物没有匹配的成功子 Agent 执行记录")
     if stage == "prd_intake":
         validate_original_input(archive, state)
     errors = validate_artifact(path, stage)
@@ -384,14 +571,17 @@ def cmd_submit(a: argparse.Namespace) -> None:
             state["stage"] = "implementation"
             state["version"] = state["stage_versions"].get("implementation", 0) + 1
             state["stage_versions"]["implementation"] = state["version"]
-            state["status"] = "drafting"
+            state["status"] = "awaiting_dispatch"
         else:
             advance(state)
     elif stage == "summary":
+        improvement = write_improvement(archive, state, path)
+        event["improvement"] = {"path": str(improvement), "sha256": digest(improvement)}
+        state["improvement_record"] = event["improvement"]
         state["status"], state["completed_at"] = "complete", now()
     else:
         advance(state)
-    if state["status"] == "drafting":
+    if state["status"] == "awaiting_dispatch":
         target = artifact_path(archive, state)
         if not target.exists():
             target.write_text(template(state, state["stage"], state["version"]), encoding="utf-8")
@@ -419,7 +609,7 @@ def cmd_clarify(a: argparse.Namespace) -> None:
     previous = artifact_path(archive, state)
     state["version"] += 1
     state["stage_versions"]["prd_intake"] = state["version"]
-    state["status"] = "drafting"
+    state["status"] = "awaiting_dispatch"
     target = artifact_path(archive, state)
     content = previous.read_text(encoding="utf-8")
     content += f"\n\n### 用户补充 {record['at']}（{a.responder}）\n\n{response.strip()}\n"
@@ -454,9 +644,9 @@ def cmd_review(a: argparse.Namespace) -> None:
     else:
         state["version"] += 1
         state["stage_versions"][stage] = state["version"]
-        state["status"] = "drafting"
+        state["status"] = "awaiting_dispatch"
     target = artifact_path(archive, state)
-    if state["status"] == "drafting" and not target.exists():
+    if state["status"] == "awaiting_dispatch" and not target.exists():
         if stage == "prd_intake" and a.decision == "reject":
             revised = path.read_text(encoding="utf-8").replace("PRD_STATUS: READY", "PRD_STATUS: NEEDS_CLARIFICATION")
             revised += f"\n\n## PRD 审核反馈（待处理）\n\n- 审核人：{a.reviewer}\n- 反馈：{a.feedback.strip()}\n"
@@ -470,13 +660,17 @@ def cmd_review(a: argparse.Namespace) -> None:
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="人工闸门驱动的研发迭代状态机")
     sub = p.add_subparsers(dest="command", required=True)
-    default_repo, default_archive = project_defaults()
+    default_repo, default_archive, default_improve, default_home = project_defaults()
     x = sub.add_parser("init")
     x.add_argument("--iteration-id", required=True); x.add_argument("--requirement", required=True)
     source = x.add_mutually_exclusive_group(required=True)
     source.add_argument("--prd"); source.add_argument("--description"); source.add_argument("--description-file")
-    x.add_argument("--repo", default=default_repo); x.add_argument("--root", default=default_archive); x.set_defaults(func=cmd_init)
+    x.add_argument("--repo", default=default_repo); x.add_argument("--root", default=default_archive)
+    x.add_argument("--improve-root", default=default_improve); x.add_argument("--home", default=default_home, help=argparse.SUPPRESS); x.set_defaults(func=cmd_init)
     x = sub.add_parser("status"); x.add_argument("--archive", required=True); x.set_defaults(func=cmd_status)
+    x = sub.add_parser("dispatch"); x.add_argument("--archive", required=True); x.add_argument("--agent-id", required=True); x.add_argument("--orchestrator", required=True); x.set_defaults(func=cmd_dispatch)
+    x = sub.add_parser("agent-complete"); x.add_argument("--archive", required=True); x.add_argument("--run-id", required=True); x.add_argument("--result", required=True, choices=["succeeded", "failed"]); x.add_argument("--evidence", required=True); x.set_defaults(func=cmd_agent_complete)
+    x = sub.add_parser("abandon"); x.add_argument("--archive", required=True); x.add_argument("--run-id", required=True); x.add_argument("--reason", required=True); x.set_defaults(func=cmd_abandon)
     x = sub.add_parser("submit"); x.add_argument("--archive", required=True); x.add_argument("--result", choices=["needs-clarification", "ready", "passed", "failed"]); x.set_defaults(func=cmd_submit)
     x = sub.add_parser("clarify"); x.add_argument("--archive", required=True); x.add_argument("--responder", required=True)
     response = x.add_mutually_exclusive_group(required=True); response.add_argument("--response"); response.add_argument("--response-file"); x.set_defaults(func=cmd_clarify)

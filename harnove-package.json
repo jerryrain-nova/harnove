@@ -1,7 +1,7 @@
 {
   "name": "harnove",
-  "version": "2.3.0",
-  "config_schema_version": 1,
+  "version": "4.0.0",
+  "config_schema_version": 2,
   "core_files": [
     "harnove-package.json",
     "harnove.config.example.json",
@@ -24,6 +24,7 @@
     "runtime/",
     "skill/",
     "iterations/",
+    "improve/",
     ".agents/skills/harnove/",
     ".claude/skills/harnove/",
     ".cursor/commands/harnove.md"

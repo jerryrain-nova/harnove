@@ -1,8 +1,9 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "project_root": "..",
   "repo_root": ".",
   "archive_root": "iterations",
+  "improve_root": "improve",
   "skill": "skill/harnove",
   "platform_entrypoints": {
     "codex": ".agents/skills/harnove",
@@ -10,6 +11,7 @@
     "claude_code": ".claude/skills/harnove"
   },
   "required_human_gates": [
+    "prd_intake",
     "technical_design",
     "code_plan",
     "test_design"

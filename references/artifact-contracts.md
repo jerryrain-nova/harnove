@@ -17,8 +17,13 @@ The archive layout is fixed:
 05-test-execution/     executable test code references and test reports
 06-summary/            final change record and retrospective
 reviews/               immutable human review records
+agent-runs/             immutable subagent work orders, leases, and completion evidence
 state.json             workflow state and history
 ```
+
+The archive is always `HARNOVE_HOME/iterations/<iteration>`. Reusable experience lives in
+`HARNOVE_HOME/improve/`. Neither directory belongs to the product source or clean Harnove
+distribution. Every stage/version uses a new subagent identity and one-time run lease.
 
 ## Required content
 
@@ -42,11 +47,18 @@ Include goals/non-goals, current architecture evidence, proposed design, data/AP
 flows, compatibility, security/performance/observability impact, risks, rollout/rollback,
 open decisions, and a requirement-to-design matrix.
 
+Add `架构与流程图`. Use `DIAGRAM_STATUS: INCLUDED` with a Mermaid architecture, sequence,
+state, or data-flow diagram when it improves verification. Otherwise use
+`DIAGRAM_STATUS: NOT_APPLICABLE` with a specific reason of at least 20 characters.
+
 ### Code-change plan
 
 Include approved design version, change boundaries, file/module/symbol-level change list,
 per-change details and reasons, requirement IDs, compatibility/migration notes, sequencing,
 risks, prohibited changes, and a design-to-code matrix. Product code must remain untouched.
+
+Add `改动关系图` under the same diagram status contract. Prefer file/module dependencies,
+changed call chains, or control flow; do not add decorative diagrams.
 
 ### Test design
 
@@ -75,6 +87,22 @@ Include background, PRD scope, approved decisions, actual changes, test conclusi
 deploy/rollback notes, residual risks, complete traceability, and 1-10 evidence-based scores
 for technical design, code plan, test design, implementation, test execution, and workflow.
 Record highlights, defects, root causes, and concrete next-iteration improvements.
+Include `根因`, `经验总结`, and `下次复用规则`. Harnove extracts these sections together with
+scores, highlights, defects, and improvements into a new immutable file in `improve/`.
+
+## Experience reuse contract
+
+At initialization, snapshot every prior `improve/*.md` record and hash into
+`00-input/*经验复用上下文.md`. Each stage must state which experience it adopted and why any
+apparently relevant rule was not applicable. Never modify a historical experience file;
+later summaries add new files so the library grows monotonically.
+
+## Subagent isolation contract
+
+The main Agent only orchestrates. A stage artifact is submittable only after a fresh subagent
+has a matching work order, active lease, and successful completion record for the exact
+stage/version. Children cannot approve gates or invoke state commands. Rejection,
+clarification, test failure, crash, or abandonment requires a new child identity and run.
 
 ## Human review contract
 

@@ -31,6 +31,8 @@ def main() -> None:
         # Add unmistakable project-owned content after a real in-place initialization.
         marker = used_harnove / "iterations" / "PROJECT-DATA-MUST-NOT-EXPORT.txt"
         marker.write_text("project-only", encoding="utf-8")
+        improve_marker = used_harnove / "improve" / "EXPERIENCE-MUST-NOT-EXPORT.md"
+        improve_marker.write_text("project-only experience", encoding="utf-8")
         project_config = json.loads((used_harnove / "config.json").read_text(encoding="utf-8"))
         project_config["project_only_marker"] = True
         (used_harnove / "config.json").write_text(
@@ -41,6 +43,7 @@ def main() -> None:
         exported = root / "exported"
         run(str(used_harnove / "scripts" / "export_package.py"), "--source", str(used_harnove), "--output", str(exported))
         assert not (exported / "iterations").exists()
+        assert not (exported / "improve").exists()
         assert not (exported / "config.json").exists()
         assert not (exported / "runtime").exists()
         assert not (exported / "skill").exists()
@@ -52,6 +55,8 @@ def main() -> None:
         run(str(exported / "init.py"), "--project", str(target))
         assert (target / ".harnove" / "config.json").is_file()
         assert (target / ".harnove" / "runtime" / "harnove.py").is_file()
+        assert (target / ".harnove" / "iterations").is_dir()
+        assert (target / ".harnove" / "improve").is_dir()
         assert (target / ".agents" / "skills" / "harnove" / "SKILL.md").is_file()
         assert (target / ".claude" / "skills" / "harnove" / "SKILL.md").is_file()
         assert (target / ".cursor" / "commands" / "harnove.md").is_file()
