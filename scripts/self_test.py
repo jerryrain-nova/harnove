@@ -16,7 +16,7 @@ import version_policy
 
 def ns_init(root: Path, iteration: str, requirement: str, **source: object) -> argparse.Namespace:
     return argparse.Namespace(
-        root=str(root / "iterations"), improve_root=str(root / "improve"), structure_root=str(root / "structure"), home=str(root),
+        root=str(root / "iterations"), improve_root=str(root / "improve"), structure_root=str(root / "structure"), custom_root=str(root / "custom"), home=str(root),
         repo=str(root), iteration_id=iteration, requirement=requirement,
         prd=source.get("prd"), description=source.get("description"),
         description_file=source.get("description_file"),
@@ -145,6 +145,17 @@ def test_existing_prd(root: Path) -> Path:
     archive = next((root / "iterations").glob("*_SMOKE-001_state-machine"))
     state = harnove.load(archive)
     assert state["status"] == "awaiting_dispatch"
+    assert (root / "custom" / "user.md").is_file()
+    assert (root / "custom" / "self.md").is_file()
+    initial_custom = archive / "00-input" / state["custom_index"]
+    assert "user.md" in initial_custom.read_text(encoding="utf-8") and "self.md" in initial_custom.read_text(encoding="utf-8")
+    harnove.cmd_customize(argparse.Namespace(
+        archive=str(archive), target="user", mode="append", actor="smoke-human",
+        content="所有导出能力必须沿用当前权限边界，并在方案中显式说明。", content_file=None,
+    ))
+    state = harnove.load(archive)
+    assert "权限边界" in (root / "custom" / "user.md").read_text(encoding="utf-8")
+    assert "权限边界" in (archive / "00-input" / state["custom_index"]).read_text(encoding="utf-8")
     original = archive / "00-input" / state["original_input_snapshot"]
     assert original.read_text(encoding="utf-8") == prd.read_text(encoding="utf-8")
 
@@ -202,6 +213,9 @@ def test_existing_prd(root: Path) -> Path:
     assert len(list((archive / "agent-runs").glob("*_work-order.json"))) == len(state["used_agent_ids"])
     improvement = Path(state["improvement_record"]["path"])
     assert improvement.is_file() and improvement.parent == root / "improve"
+    custom_experience = Path(state["custom_experience_record"]["path"])
+    assert custom_experience == root / "custom" / "self.md"
+    assert "FEEDBACK_EXPERIENCE_STATUS: CAPTURED" in custom_experience.read_text(encoding="utf-8")
     return improvement
 
 
@@ -215,6 +229,9 @@ def test_natural_language_reuses_experience(root: Path, improvement: Path) -> No
     assert improvement.name in context.read_text(encoding="utf-8")
     structure_context = archive / "00-input" / harnove.load(archive)["structure_index"]
     assert "project-structure.md" in structure_context.read_text(encoding="utf-8")
+    custom_context = archive / "00-input" / harnove.load(archive)["custom_index"]
+    custom_text = custom_context.read_text(encoding="utf-8")
+    assert "user.md" in custom_text and "self.md" in custom_text and "权限边界" in custom_text
     try:
         harnove.cmd_submit(argparse.Namespace(archive=str(archive), result="needs-clarification"))
         raise AssertionError("orchestrator bypassed subagent dispatch")
@@ -239,7 +256,7 @@ def test_natural_language_reuses_experience(root: Path, improvement: Path) -> No
 
 def main() -> None:
     package = json.loads((Path(__file__).resolve().parent.parent / "harnove-package.json").read_text(encoding="utf-8"))
-    assert version_policy.expected(version_policy.parse("4.0.0"), "feature") == version_policy.parse(package["version"])
+    assert version_policy.expected(version_policy.parse("4.1.0"), "feature") == version_policy.parse(package["version"])
     with tempfile.TemporaryDirectory(prefix="harnove-") as tmp, redirect_stdout(StringIO()):
         root = Path(tmp)
         improvement = test_existing_prd(root)

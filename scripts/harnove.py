@@ -48,7 +48,7 @@ REQUIRED_SECTIONS = {
     "implementation": ["需求依据", "批准基线", "实际改动", "Git 证据", "方案偏差"],
     "test_execution": ["需求依据", "实际变更审查", "可执行测试", "执行结果", "结论"],
     "structure_refresh": ["实际变更依据", "受影响结构", "结构更新", "一致性验证", "代码证据"],
-    "summary": ["需求背景", "迭代内容", "测试结论", "追溯矩阵", "环节评分", "亮点", "缺点", "根因", "经验总结", "下次复用规则", "改进项"],
+    "summary": ["需求背景", "迭代内容", "测试结论", "追溯矩阵", "用户反馈经验", "环节评分", "亮点", "缺点", "根因", "经验总结", "下次复用规则", "改进项"],
 }
 PLACEHOLDER = "<!-- 待填写；所有判断须引用 REQ-xxx 或代码证据。 -->"
 
@@ -78,7 +78,7 @@ def inside(path: Path, parent: Path) -> bool:
         return False
 
 
-def project_defaults() -> tuple[str, str, str, str, str]:
+def project_defaults() -> tuple[str, str, str, str, str, str]:
     runtime_home = Path(__file__).resolve().parent.parent
     direct = runtime_home / "config.json"
     starts = [Path.cwd().resolve(), Path(__file__).resolve().parent]
@@ -100,11 +100,12 @@ def project_defaults() -> tuple[str, str, str, str, str]:
         archive = (home / config.get("archive_root", "iterations")).resolve()
         improve = (home / config.get("improve_root", "improve")).resolve()
         structure = (home / config.get("structure_root", "structure")).resolve()
-        if not inside(archive, home) or not inside(improve, home) or not inside(structure, home):
-            raise SystemExit("config.json 中的 archive_root、improve_root 和 structure_root 必须位于 Harnove 目录内")
-        return str(repo), str(archive), str(improve), str(structure), str(home)
+        custom = (home / config.get("custom_root", "custom")).resolve()
+        if not all(inside(path, home) for path in [archive, improve, structure, custom]):
+            raise SystemExit("config.json 中的 archive_root、improve_root、structure_root 和 custom_root 必须位于 Harnove 目录内")
+        return str(repo), str(archive), str(improve), str(structure), str(custom), str(home)
     fallback_home = Path.cwd().resolve()
-    return ".", str(fallback_home / "iterations"), str(fallback_home / "improve"), str(fallback_home / "structure"), str(fallback_home)
+    return ".", str(fallback_home / "iterations"), str(fallback_home / "improve"), str(fallback_home / "structure"), str(fallback_home / "custom"), str(fallback_home)
 
 
 def load(archive: Path) -> dict:
@@ -112,24 +113,28 @@ def load(archive: Path) -> dict:
     if not path.is_file():
         raise SystemExit(f"找不到状态文件: {path}")
     state = json.loads(path.read_text(encoding="utf-8"))
-    if state.get("schema_version", 1) < 5:
-        _, _, discovered_improve, discovered_structure, discovered_home = project_defaults()
+    if state.get("schema_version", 1) < 6:
+        _, _, discovered_improve, discovered_structure, discovered_custom, discovered_home = project_defaults()
         inferred_home = archive.parent.parent.resolve()
         migration_home = Path(discovered_home) if inside(archive, Path(discovered_home)) else inferred_home
         migration_improve = Path(discovered_improve) if inside(Path(discovered_improve), migration_home) else migration_home / "improve"
         migration_structure = Path(discovered_structure) if inside(Path(discovered_structure), migration_home) else migration_home / "structure"
+        migration_custom = Path(discovered_custom) if inside(Path(discovered_custom), migration_home) else migration_home / "custom"
         state.setdefault("harnove_home", str(migration_home))
         state.setdefault("improve_root", str(migration_improve))
         state.setdefault("structure_root", str(migration_structure))
+        state.setdefault("custom_root", str(migration_custom))
         state.setdefault("used_agent_ids", [])
-        state.setdefault("history", []).append({"at": now(), "action": "schema_migration", "from": state.get("schema_version", 1), "to": 5})
+        state.setdefault("history", []).append({"at": now(), "action": "schema_migration", "from": state.get("schema_version", 1), "to": 6})
         if state.get("status") == "drafting":
             state["status"] = "awaiting_dispatch"
-        state["schema_version"] = 5
+        state["schema_version"] = 6
         if not state.get("improvement_index") and (archive / "00-input").is_dir():
             state["improvement_index"] = create_improvement_context(archive, state)
         if not state.get("structure_index") and (archive / "00-input").is_dir():
             state["structure_index"] = create_structure_context(archive, state)
+        if not state.get("custom_index") and (archive / "00-input").is_dir():
+            state["custom_index"] = create_custom_context(archive, state)
         save(archive, state)
     return state
 
@@ -152,7 +157,7 @@ def capture_git_evidence(archive: Path, state: dict) -> list[str]:
     folder, version = archive / DIRS["implementation"], state["version"]
     repo = Path(state["repo"]).resolve()
     scope = ["--", "."]
-    for excluded in [Path(state["archive"]).parent, Path(state["improve_root"]), Path(state["structure_root"])]:
+    for excluded in [Path(state["archive"]).parent, Path(state["improve_root"]), Path(state["structure_root"]), Path(state["custom_root"])]:
         if inside(excluded, repo):
             scope.append(f":(exclude){excluded.resolve().relative_to(repo).as_posix()}/**")
     commands = {
@@ -257,6 +262,7 @@ def template(state: dict, stage: str, version: int) -> str:
         f"- PRD 快照：`00-input/{state['prd_snapshot']}`", f"- PRD SHA-256：`{state['prd_sha256']}`",
         f"- 经验复用索引：`00-input/{state['improvement_index']}`",
         f"- 项目结构索引：`00-input/{state['structure_index']}`",
+        f"- 项目自定义上下文：`00-input/{state['custom_index']}`",
         f"- 仓库基线：`{state.get('git_baseline') or 'GIT_UNAVAILABLE'}`", "",
     ]
     if stage in {"technical_design", "code_plan"}:
@@ -272,6 +278,9 @@ def template(state: dict, stage: str, version: int) -> str:
             lines += ["CHANGE_TREE_STATUS: INCLUDED", "", "```text", "需求/方案根节点", "├── 待细化变更一", "└── 待细化变更二", "```", ""]
         if section in {"架构与流程图", "改动关系图"}:
             lines += ["DIAGRAM_STATUS: INCLUDED", "", "```mermaid", "flowchart LR", "  A[待细化输入] --> B[待细化处理]", "  B --> C[待细化输出]", "```", ""]
+        if section == "用户反馈经验":
+            status = "CAPTURED" if user_feedback_items(state) else "NONE"
+            lines += [f"FEEDBACK_EXPERIENCE_STATUS: {status}", ""]
     return "\n".join(lines)
 
 
@@ -341,6 +350,21 @@ def validate_artifact(path: Path, stage: str, state: dict | None = None, last_ru
                 errors.append("需求完成后必须更新 structure 并声明 STRUCTURE_STATUS: UPDATED")
             if updated and current == before:
                 errors.append("声明 UPDATED 但 structure 文件内容未发生变化")
+    if stage == "summary" and state is not None:
+        feedback = user_feedback_items(state)
+        section = section_text(text, "用户反馈经验")
+        captured = "FEEDBACK_EXPERIENCE_STATUS: CAPTURED" in section
+        none = "FEEDBACK_EXPERIENCE_STATUS: NONE" in section
+        if captured == none:
+            errors.append("用户反馈经验必须且只能声明 FEEDBACK_EXPERIENCE_STATUS: CAPTURED 或 NONE")
+        elif feedback and not captured:
+            errors.append("本次存在用户反馈，必须总结经验并声明 FEEDBACK_EXPERIENCE_STATUS: CAPTURED")
+        elif captured:
+            distilled = section.replace("FEEDBACK_EXPERIENCE_STATUS: CAPTURED", "").strip()
+            if len(distilled) < 40:
+                errors.append("用户反馈经验过短，必须提炼具体、可复用的执行规则")
+        elif not feedback and not none:
+            errors.append("本次无用户反馈时必须声明 FEEDBACK_EXPERIENCE_STATUS: NONE")
     return errors
 
 
@@ -414,6 +438,64 @@ def create_structure_context(archive: Path, state: dict, label: str = "initial")
     return name
 
 
+CUSTOM_DEFAULTS = {
+    "user.md": "# 用户个性化诉求\n\n暂无。用户对本项目的长期约束、偏好和额外诉求记录在此。\n",
+    "self.md": "# Harnove 项目经验\n\n暂无。Harnove 将在需求完成后追加从用户反馈中提炼的可复用经验。\n",
+}
+
+
+def ensure_custom_files(root: Path) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    for name, content in CUSTOM_DEFAULTS.items():
+        target = root / name
+        if not target.exists():
+            target.write_text(content, encoding="utf-8")
+
+
+def create_custom_context(archive: Path, state: dict, label: str = "initial") -> str:
+    root = Path(state["custom_root"])
+    ensure_custom_files(root)
+    name = f"{state['iteration_id']}_{state['requirement']}_项目自定义上下文_{safe_name(label)}.md"
+    target = archive / "00-input" / name
+    lines = [
+        f"# {state['iteration_id']} {state['requirement']} - 项目自定义上下文", "",
+        "本快照必须在执行当前需求迭代前读取；user.md 优先表达用户约束，self.md 提供历史经验。", "",
+    ]
+    for item in sorted(root.glob("*.md")):
+        lines += [f"## {item.name}", "", f"- SHA-256：`{digest(item)}`", "", item.read_text(encoding="utf-8", errors="replace"), ""]
+    target.write_text("\n".join(lines), encoding="utf-8")
+    return name
+
+
+def user_feedback_items(state: dict) -> list[str]:
+    items = []
+    for event in state.get("history", []):
+        if event.get("action") == "user_clarification" and event.get("response"):
+            items.append(event["response"].strip())
+        elif event.get("action") == "human_review" and event.get("feedback"):
+            items.append(event["feedback"].strip())
+        elif event.get("action") == "custom_update" and event.get("content"):
+            items.append(event["content"].strip())
+    return items
+
+
+def write_custom_experience(archive: Path, state: dict, summary: Path) -> Path | None:
+    if not user_feedback_items(state):
+        return None
+    root = Path(state["custom_root"])
+    ensure_custom_files(root)
+    target = root / "self.md"
+    experience = section_text(summary.read_text(encoding="utf-8"), "用户反馈经验")
+    block = [
+        "", f"## {dt.date.today():%Y-%m-%d} {state['iteration_id']} {state['requirement']}", "",
+        f"- 来源归档：`{archive}`", f"- 来源总结 SHA-256：`{digest(summary)}`", "",
+        experience, "",
+    ]
+    with target.open("a", encoding="utf-8") as stream:
+        stream.write("\n".join(block))
+    return target
+
+
 def write_improvement(archive: Path, state: dict, summary: Path) -> Path:
     improve_root = Path(state["improve_root"])
     improve_root.mkdir(parents=True, exist_ok=True)
@@ -438,8 +520,9 @@ def cmd_init(a: argparse.Namespace) -> None:
     home = Path(getattr(a, "home", root.parent)).resolve()
     improve_root = Path(getattr(a, "improve_root", home / "improve")).resolve()
     structure_root = Path(getattr(a, "structure_root", home / "structure")).resolve()
-    if not inside(root, home) or not inside(improve_root, home) or not inside(structure_root, home):
-        raise SystemExit("迭代归档、improve 和 structure 必须位于 Harnove 自身目录内")
+    custom_root = Path(getattr(a, "custom_root", home / "custom")).resolve()
+    if not all(inside(path, home) for path in [root, improve_root, structure_root, custom_root]):
+        raise SystemExit("迭代归档、improve、structure 和 custom 必须位于 Harnove 自身目录内")
     prd_arg = getattr(a, "prd", None)
     description = getattr(a, "description", None)
     description_file = getattr(a, "description_file", None)
@@ -462,14 +545,15 @@ def cmd_init(a: argparse.Namespace) -> None:
         (archive / folder).mkdir(parents=True, exist_ok=True)
     baseline = git(repo, "rev-parse", "HEAD")
     state = {
-        "schema_version": 5, "iteration_id": ident, "requirement": req,
+        "schema_version": 6, "iteration_id": ident, "requirement": req,
         "archive": str(archive), "repo": str(repo), "harnove_home": str(home),
-        "improve_root": str(improve_root), "structure_root": str(structure_root), "git_baseline": baseline,
+        "improve_root": str(improve_root), "structure_root": str(structure_root), "custom_root": str(custom_root), "git_baseline": baseline,
         "created_at": now(), "history": [], "approved": {}, "test_cycles": 0,
         "stage_versions": {stage: 0 for stage in STAGES}, "used_agent_ids": [],
     }
     state["improvement_index"] = create_improvement_context(archive, state)
     state["structure_index"] = create_structure_context(archive, state)
+    state["custom_index"] = create_custom_context(archive, state)
 
     if prd_arg:
         prd = Path(prd_arg).resolve()
@@ -526,6 +610,8 @@ def cmd_dispatch(a: argparse.Namespace) -> None:
         "structure_context": str(archive / "00-input" / state["structure_index"]),
         "structure_root": state["structure_root"],
         "structure_before": structure_hashes(Path(state["structure_root"])),
+        "custom_context": str(archive / "00-input" / state["custom_index"]),
+        "custom_root": state["custom_root"],
         "approved_inputs": state.get("approved", {}),
         "write_scope": (
             "approved_repo_scope_and_artifact" if stage in {"implementation", "test_execution"}
@@ -535,7 +621,9 @@ def cmd_dispatch(a: argparse.Namespace) -> None:
         "rules": [
             "只执行当前 stage/version，不执行状态机命令或人工审批",
             "读取经验复用上下文并记录采用或不适用的经验",
+            "开始当前环节前读取项目自定义上下文，遵守 user.md 约束并复用 self.md 经验",
             "优先读取 structure 记录；涉及设计时先与需求相关代码核对，不一致则先更新 structure",
+            "summary 环节必须根据澄清、审核反馈和 custom 更新提炼用户反馈经验",
             "不得执行其他环节的工作，不得复用本次子 Agent 身份",
         ],
     }
@@ -684,6 +772,11 @@ def cmd_submit(a: argparse.Namespace) -> None:
         improvement = write_improvement(archive, state, path)
         event["improvement"] = {"path": str(improvement), "sha256": digest(improvement)}
         state["improvement_record"] = event["improvement"]
+        custom_experience = write_custom_experience(archive, state, path)
+        if custom_experience:
+            event["custom_experience"] = {"path": str(custom_experience), "sha256": digest(custom_experience)}
+            state["custom_experience_record"] = event["custom_experience"]
+            state["custom_index"] = create_custom_context(archive, state, "completed")
         state["status"], state["completed_at"] = "complete", now()
     else:
         advance(state)
@@ -724,6 +817,42 @@ def cmd_clarify(a: argparse.Namespace) -> None:
     save(archive, state)
     print(f"已保留澄清记录并创建新版本: {target}")
     print("请依据回复修订候选 PRD；仍有关键歧义可再次提交 needs-clarification，否则标记 READY 后提交。")
+
+
+def cmd_customize(a: argparse.Namespace) -> None:
+    archive, state = Path(a.archive).resolve(), load(Path(a.archive).resolve())
+    if state["status"] == "complete":
+        raise SystemExit("迭代已完成；请创建新迭代后记录新的 custom 诉求")
+    if state["status"] not in {"awaiting_dispatch", "awaiting_user_clarification"}:
+        raise SystemExit("custom 只能在派发新子 Agent 前更新；请先结束当前子 Agent，或在人工闸门驳回当前产物")
+    content = a.content
+    if a.content_file:
+        source = Path(a.content_file).resolve()
+        if not source.is_file():
+            raise SystemExit(f"custom 内容文件不存在: {source}")
+        content = source.read_text(encoding="utf-8")
+    if not content or not content.strip():
+        raise SystemExit("custom 更新内容不能为空")
+    root = Path(state["custom_root"])
+    ensure_custom_files(root)
+    target = root / f"{a.target}.md"
+    before = digest(target)
+    if a.mode == "replace":
+        heading = "# 用户个性化诉求" if a.target == "user" else "# Harnove 项目经验"
+        target.write_text(f"{heading}\n\n{content.strip()}\n", encoding="utf-8")
+    else:
+        with target.open("a", encoding="utf-8") as stream:
+            stream.write(f"\n\n## {now()} · {a.actor}\n\n{content.strip()}\n")
+    ensure_custom_files(root)
+    event = {
+        "at": now(), "action": "custom_update", "target": target.name, "mode": a.mode,
+        "actor": a.actor, "content": content.strip(), "before_sha256": before, "after_sha256": digest(target),
+    }
+    state["history"].append(event)
+    state["custom_index"] = create_custom_context(archive, state, f"custom-{len(user_feedback_items(state)):03d}")
+    event["custom_snapshot"] = state["custom_index"]
+    save(archive, state)
+    print(json.dumps(event, ensure_ascii=False, indent=2))
 
 
 def cmd_review(a: argparse.Namespace) -> None:
@@ -771,13 +900,13 @@ def cmd_review(a: argparse.Namespace) -> None:
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="人工闸门驱动的研发迭代状态机")
     sub = p.add_subparsers(dest="command", required=True)
-    default_repo, default_archive, default_improve, default_structure, default_home = project_defaults()
+    default_repo, default_archive, default_improve, default_structure, default_custom, default_home = project_defaults()
     x = sub.add_parser("init")
     x.add_argument("--iteration-id", required=True); x.add_argument("--requirement", required=True)
     source = x.add_mutually_exclusive_group(required=True)
     source.add_argument("--prd"); source.add_argument("--description"); source.add_argument("--description-file")
     x.add_argument("--repo", default=default_repo); x.add_argument("--root", default=default_archive)
-    x.add_argument("--improve-root", default=default_improve); x.add_argument("--structure-root", default=default_structure)
+    x.add_argument("--improve-root", default=default_improve); x.add_argument("--structure-root", default=default_structure); x.add_argument("--custom-root", default=default_custom)
     x.add_argument("--home", default=default_home, help=argparse.SUPPRESS); x.set_defaults(func=cmd_init)
     x = sub.add_parser("status"); x.add_argument("--archive", required=True); x.set_defaults(func=cmd_status)
     x = sub.add_parser("dispatch"); x.add_argument("--archive", required=True); x.add_argument("--agent-id", required=True); x.add_argument("--orchestrator", required=True); x.set_defaults(func=cmd_dispatch)
@@ -786,6 +915,8 @@ def parser() -> argparse.ArgumentParser:
     x = sub.add_parser("submit"); x.add_argument("--archive", required=True); x.add_argument("--result", choices=["needs-clarification", "ready", "passed", "failed"]); x.set_defaults(func=cmd_submit)
     x = sub.add_parser("clarify"); x.add_argument("--archive", required=True); x.add_argument("--responder", required=True)
     response = x.add_mutually_exclusive_group(required=True); response.add_argument("--response"); response.add_argument("--response-file"); x.set_defaults(func=cmd_clarify)
+    x = sub.add_parser("customize"); x.add_argument("--archive", required=True); x.add_argument("--target", choices=["user", "self"], default="user"); x.add_argument("--mode", choices=["append", "replace"], default="append"); x.add_argument("--actor", required=True)
+    custom_content = x.add_mutually_exclusive_group(required=True); custom_content.add_argument("--content"); custom_content.add_argument("--content-file"); x.set_defaults(func=cmd_customize)
     x = sub.add_parser("review"); x.add_argument("--archive", required=True); x.add_argument("--decision", required=True, choices=["approve", "reject"]); x.add_argument("--reviewer", required=True); x.add_argument("--feedback", default=""); x.set_defaults(func=cmd_review)
     return p
 

@@ -35,6 +35,8 @@ def main() -> None:
         improve_marker.write_text("project-only experience", encoding="utf-8")
         structure_marker = used_harnove / "structure" / "PROJECT-STRUCTURE-MUST-NOT-EXPORT.md"
         structure_marker.write_text("project-only structure", encoding="utf-8")
+        custom_marker = used_harnove / "custom" / "user.md"
+        custom_marker.write_text("project-only custom preference", encoding="utf-8")
         project_config = json.loads((used_harnove / "config.json").read_text(encoding="utf-8"))
         project_config["project_only_marker"] = True
         (used_harnove / "config.json").write_text(
@@ -47,6 +49,7 @@ def main() -> None:
         assert not (exported / "iterations").exists()
         assert not (exported / "improve").exists()
         assert not (exported / "structure").exists()
+        assert not (exported / "custom").exists()
         assert not (exported / "config.json").exists()
         assert not (exported / "runtime").exists()
         assert not (exported / "skill").exists()
@@ -62,6 +65,8 @@ def main() -> None:
         assert (target / ".harnove" / "iterations").is_dir()
         assert (target / ".harnove" / "improve").is_dir()
         assert (target / ".harnove" / "structure").is_dir()
+        assert (target / ".harnove" / "custom" / "user.md").is_file()
+        assert (target / ".harnove" / "custom" / "self.md").is_file()
         assert (target / ".agents" / "skills" / "harnove" / "SKILL.md").is_file()
         assert (target / ".claude" / "skills" / "harnove" / "SKILL.md").is_file()
         assert (target / ".cursor" / "commands" / "harnove.md").is_file()
