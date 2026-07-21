@@ -1,13 +1,13 @@
 ---
 name: harnove
-description: Orchestrate a Harnove software iteration from an existing PRD or natural-language requirement using fresh isolated subagents for PRD preparation, technical design, code planning, test design, implementation, testing, and retrospective learning, with mandatory human gates, Mermaid-assisted design documents, Harnove-local archives, and reusable improvement history.
+description: Orchestrate a Harnove software iteration from an existing PRD or natural-language requirement using fresh isolated subagents, persistent project-structure knowledge, structure-verified technical and code design, mandatory human gates, Mermaid and change-tree artifacts, Harnove-local archives, and reusable improvement history.
 ---
 
 # Orchestrate a Harnove iteration
 
 Locate the nearest Harnove `config.json`; treat its parent as `HARNOVE_HOME`. Use
 `HARNOVE_HOME/runtime/harnove.py` as the authoritative state machine and read
-`references/artifact-contracts.md` completely. Keep `iterations/` and `improve/` under
+`references/artifact-contracts.md` completely. Keep `iterations/`, `improve/`, and `structure/` under
 `HARNOVE_HOME`; never create them at the product repository root.
 
 ## Keep the main Agent orchestration-only
@@ -25,7 +25,8 @@ For every `(stage, version)`:
    Never reuse a subagent across stages, versions, rejections, clarification revisions, or
    test-fix cycles. If the platform cannot create subagents, stop and report the limitation.
 5. Monitor the child. The child may work only within the work order, must read the frozen PRD
-   and experience context, and must not call Harnove state commands or approve a gate.
+   experience context, and current structure knowledge, and must not call Harnove state
+   commands or approve a gate.
 6. On success, run `agent-complete ... --result succeeded --evidence <summary>`. On failure,
    run it with `failed`; on timeout/crash use `abandon --reason <reason>`, then dispatch a new
    child. A successful run changes status to `ready_for_submit`.
@@ -52,15 +53,22 @@ approval alone freezes the candidate PRD and advances the workflow.
 
 ## Execute isolated stages
 
+- `structure_analysis`: read `HARNOVE_HOME/structure/` first. If records exist, inspect only
+  demand-relevant code to verify them. If empty, inspect the full repository and create
+  structure records split into `功能模块`, `代码框架`, and `结构定义和关系`. Record code evidence.
 - `technical_design`: document repository evidence, architecture, flows, constraints, risks,
-  rollout, rollback, traceability, and relevant historical experience.
+  rollout, rollback, traceability, and relevant historical experience. Before designing,
+  verify demand-related structure records against current code and update stale records.
 - `code_plan`: specify file/module/symbol scope, exact rules, boundaries, rationale, risks,
-  sequencing, prohibited changes, and traceability. Do not modify product code.
+  sequencing, prohibited changes, and traceability. Recheck demand-related structure records
+  against current code and update them before planning. Do not modify product code.
 - `test_design`: cover every requirement and planned change with purpose, preconditions,
   steps, expected result, type, priority, and edge/failure behavior. Do not modify code.
 - `implementation`: modify only approved scope and record deviations and Git evidence.
 - `test_execution`: inspect the actual diff, implement and run executable tests, then submit
   `passed|failed`. Failure creates a new implementation version and fresh child.
+- `structure_refresh`: after tests pass, inspect the actual diff and update persistent
+  structure records so they describe the completed code. This stage must change structure.
 - `summary`: reconcile all evidence, score every stage, identify root causes, extract reusable
   experience, and specify next-iteration reuse rules.
 
@@ -74,10 +82,34 @@ related components or steps easier to verify. Set `DIAGRAM_STATUS: INCLUDED` and
 valid Mermaid block. Avoid decorative diagrams. If a diagram genuinely adds no value, set
 `DIAGRAM_STATUS: NOT_APPLICABLE` and provide a concrete reason of at least 20 characters.
 
+In every technical design, include `功能变更树`; in every code plan, include `代码变更树`.
+Use a readable text tree with explicit roots, branches, affected boundaries, and at least two
+nodes so reviewers can see scope at a glance. Set `CHANGE_TREE_STATUS: INCLUDED`.
+
+Default to `PRESENTATION_FORMAT: MD`. If Markdown cannot express a complex relationship
+precisely, set `PRESENTATION_FORMAT: HTML` and create a same-name `.html` sidecar in the
+iteration archive. Use HTML only when it materially improves precision; the Markdown artifact
+remains the authoritative index and must still contain the change tree and evidence.
+
+## Maintain project structure knowledge
+
+Treat `HARNOVE_HOME/structure/` as project-owned, cumulative knowledge. Use Markdown by
+default and HTML only when necessary. Every structure file must cover functional modules,
+code framework, and structure definitions/relationships with file or symbol evidence. Use
+`STRUCTURE_STATUS: CONSISTENT` only after checking relevant code. If any mismatch exists,
+update structure first and use `STRUCTURE_STATUS: UPDATED`. Never package or publish structure
+records as Harnove core files.
+
 ## Reuse and grow experience
 
 Require every subagent to read the iteration's `00-input/*经验复用上下文.md`, cite adopted
 experience, and explain why irrelevant guidance does not apply. On successful summary
 submission, Harnove writes an immutable experience record under `HARNOVE_HOME/improve/`.
 Future iterations automatically snapshot the accumulated records. Never package, publish,
-or include `iterations/` or `improve/` in product Git evidence when iterating Harnove itself.
+or include `iterations/`, `improve/`, or `structure/` in product Git evidence when iterating Harnove itself.
+
+## Version Harnove itself
+
+For `a.b.c`, increment only `c` for fixes or optimization without new functionality, increment
+`b` and reset `c` for new functionality, and increment `a` while resetting `b.c` for an
+architecture change. Validate releases with `scripts/version_policy.py`.

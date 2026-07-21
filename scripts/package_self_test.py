@@ -33,6 +33,8 @@ def main() -> None:
         marker.write_text("project-only", encoding="utf-8")
         improve_marker = used_harnove / "improve" / "EXPERIENCE-MUST-NOT-EXPORT.md"
         improve_marker.write_text("project-only experience", encoding="utf-8")
+        structure_marker = used_harnove / "structure" / "PROJECT-STRUCTURE-MUST-NOT-EXPORT.md"
+        structure_marker.write_text("project-only structure", encoding="utf-8")
         project_config = json.loads((used_harnove / "config.json").read_text(encoding="utf-8"))
         project_config["project_only_marker"] = True
         (used_harnove / "config.json").write_text(
@@ -44,11 +46,13 @@ def main() -> None:
         run(str(used_harnove / "scripts" / "export_package.py"), "--source", str(used_harnove), "--output", str(exported))
         assert not (exported / "iterations").exists()
         assert not (exported / "improve").exists()
+        assert not (exported / "structure").exists()
         assert not (exported / "config.json").exists()
         assert not (exported / "runtime").exists()
         assert not (exported / "skill").exists()
         build = json.loads((exported / "package-build.json").read_text(encoding="utf-8"))
         assert build["version"] == json.loads((source / "harnove-package.json").read_text(encoding="utf-8"))["version"]
+        assert build["version_policy"]["new_feature"] == "increment_minor_b"
 
         target = root / "target-project"
         target.mkdir()
@@ -57,6 +61,7 @@ def main() -> None:
         assert (target / ".harnove" / "runtime" / "harnove.py").is_file()
         assert (target / ".harnove" / "iterations").is_dir()
         assert (target / ".harnove" / "improve").is_dir()
+        assert (target / ".harnove" / "structure").is_dir()
         assert (target / ".agents" / "skills" / "harnove" / "SKILL.md").is_file()
         assert (target / ".claude" / "skills" / "harnove" / "SKILL.md").is_file()
         assert (target / ".cursor" / "commands" / "harnove.md").is_file()

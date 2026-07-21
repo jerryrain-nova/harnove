@@ -4,17 +4,19 @@
 from __future__ import annotations
 
 import argparse
+import json
 import tempfile
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 
 import harnove
+import version_policy
 
 
 def ns_init(root: Path, iteration: str, requirement: str, **source: object) -> argparse.Namespace:
     return argparse.Namespace(
-        root=str(root / "iterations"), improve_root=str(root / "improve"), home=str(root),
+        root=str(root / "iterations"), improve_root=str(root / "improve"), structure_root=str(root / "structure"), home=str(root),
         repo=str(root), iteration_id=iteration, requirement=requirement,
         prd=source.get("prd"), description=source.get("description"),
         description_file=source.get("description_file"),
@@ -29,6 +31,18 @@ def fill_current(archive: Path) -> None:
         "REQ-001：依据已批准 PRD。本节记录结论、边界、历史经验采用情况与预期结果。",
     )
     text = text.replace("待细化输入", "需求输入").replace("待细化处理", "方案处理").replace("待细化输出", "可验证输出")
+    text = text.replace("待细化变更一", "订单导出功能").replace("待细化变更二", "权限与数量边界")
+    structure_file = Path(state["structure_root"]) / "project-structure.md"
+    if state["stage"] == "structure_analysis":
+        structure_file.write_text(
+            "# 项目结构解读\n\n## 功能模块\n\n订单模块负责查询与导出。\n\n"
+            "## 代码框架\n\n采用分层服务结构。\n\n## 结构定义和关系\n\n控制器调用服务，服务访问仓储。\n",
+            encoding="utf-8",
+        )
+        text = text.replace("STRUCTURE_STATUS: CONSISTENT", "STRUCTURE_STATUS: UPDATED")
+    elif state["stage"] == "structure_refresh":
+        structure_file.write_text(structure_file.read_text(encoding="utf-8") + "\n## 本次刷新\n\nREQ-001 已完成，导出关系已核验。\n", encoding="utf-8")
+        text = text.replace("STRUCTURE_STATUS: CONSISTENT", "STRUCTURE_STATUS: UPDATED")
     if state["stage"] in {"technical_design", "code_plan"}:
         text += "\nDIAGRAM_STATUS: INCLUDED\n\n```mermaid\nflowchart LR\n  A[输入] --> B[处理]\n  B --> C[输出]\n```\n"
     text += "\n" + ("REQ-001 的范围证据、实现约束与验证说明。" * 40) + "\n"
@@ -149,6 +163,10 @@ def test_existing_prd(root: Path) -> Path:
     harnove.cmd_submit(argparse.Namespace(archive=str(archive), result="ready"))
     review(archive, "approve")
 
+    assert harnove.load(archive)["stage"] == "structure_analysis"
+    submit(archive)
+    assert harnove.load(archive)["stage"] == "technical_design"
+
     # Diagram contract accepts a real Mermaid block and rejects a content-free N/A escape.
     fill_current(archive)
     design_path = harnove.artifact_path(archive, harnove.load(archive))
@@ -156,6 +174,13 @@ def test_existing_prd(root: Path) -> Path:
     assert not harnove.validate_artifact(design_path, "technical_design")
     design_path.write_text(valid_design.replace("DIAGRAM_STATUS: INCLUDED", "DIAGRAM_STATUS: NOT_APPLICABLE").replace("```mermaid", "```text"), encoding="utf-8")
     assert any("NOT_APPLICABLE" in error for error in harnove.validate_artifact(design_path, "technical_design"))
+    design_path.write_text(valid_design, encoding="utf-8")
+    html_design = valid_design.replace("PRESENTATION_FORMAT: MD", "PRESENTATION_FORMAT: HTML")
+    design_path.write_text(html_design, encoding="utf-8")
+    html_path = design_path.with_suffix(".html")
+    html_path.write_text("<html><body>" + ("结构关系可视化说明" * 80) + "</body></html>", encoding="utf-8")
+    assert not harnove.validate_artifact(design_path, "technical_design", harnove.load(archive), {"structure_before": harnove.structure_hashes(Path(harnove.load(archive)["structure_root"]))})
+    html_path.unlink()
     design_path.write_text(valid_design, encoding="utf-8")
 
     submit(archive); review(archive, "reject", "补充回滚证据")
@@ -167,6 +192,8 @@ def test_existing_prd(root: Path) -> Path:
     assert harnove.load(archive)["stage"] == "implementation"
     submit(archive)
     submit(archive, "passed")
+    submit(archive)
+    assert harnove.load(archive)["stage"] == "summary"
     submit(archive)
     state = harnove.load(archive)
     assert state["status"] == "complete"
@@ -186,6 +213,8 @@ def test_natural_language_reuses_experience(root: Path, improvement: Path) -> No
     archive = next((root / "iterations").glob("*_SMOKE-002_order-export"))
     context = archive / "00-input" / harnove.load(archive)["improvement_index"]
     assert improvement.name in context.read_text(encoding="utf-8")
+    structure_context = archive / "00-input" / harnove.load(archive)["structure_index"]
+    assert "project-structure.md" in structure_context.read_text(encoding="utf-8")
     try:
         harnove.cmd_submit(argparse.Namespace(archive=str(archive), result="needs-clarification"))
         raise AssertionError("orchestrator bypassed subagent dispatch")
@@ -202,10 +231,15 @@ def test_natural_language_reuses_experience(root: Path, improvement: Path) -> No
     harnove.cmd_submit(argparse.Namespace(archive=str(archive), result="ready"))
     review(archive, "approve")
     state = harnove.load(archive)
-    assert state["stage"] == "technical_design" and state["status"] == "awaiting_dispatch"
+    assert state["stage"] == "structure_analysis" and state["status"] == "awaiting_dispatch"
+    assert "STRUCTURE_SOURCE: REUSED_AND_VERIFIED" in harnove.artifact_path(archive, state).read_text(encoding="utf-8")
+    submit(archive)
+    assert harnove.load(archive)["stage"] == "technical_design"
 
 
 def main() -> None:
+    package = json.loads((Path(__file__).resolve().parent.parent / "harnove-package.json").read_text(encoding="utf-8"))
+    assert version_policy.expected(version_policy.parse("4.0.0"), "feature") == version_policy.parse(package["version"])
     with tempfile.TemporaryDirectory(prefix="harnove-") as tmp, redirect_stdout(StringIO()):
         root = Path(tmp)
         improvement = test_existing_prd(root)

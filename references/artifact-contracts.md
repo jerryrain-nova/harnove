@@ -22,7 +22,7 @@ state.json             workflow state and history
 ```
 
 The archive is always `HARNOVE_HOME/iterations/<iteration>`. Reusable experience lives in
-`HARNOVE_HOME/improve/`. Neither directory belongs to the product source or clean Harnove
+`HARNOVE_HOME/improve/`; project interpretation lives in `HARNOVE_HOME/structure/`. These directories do not belong to the product source or clean Harnove
 distribution. Every stage/version uses a new subagent identity and one-time run lease.
 
 ## Required content
@@ -41,11 +41,25 @@ Every clarification and rejection is immutable and produces a new PRD version. A
 must receive explicit human approval; only the approved version and hash become the
 authoritative downstream scope baseline.
 
+### Project structure analysis
+
+Read persistent structure records before scanning code. If the library is empty, declare
+`STRUCTURE_SOURCE: FULL_REPOSITORY_SCAN`, inspect the whole project, and create records that
+separately cover `功能模块`, `代码框架`, and `结构定义和关系`. If records exist, declare
+`STRUCTURE_SOURCE: REUSED_AND_VERIFIED`, inspect demand-related code, and verify the records.
+Use `STRUCTURE_STATUS: UPDATED` when records are created or corrected and cite file/symbol
+evidence; otherwise use `CONSISTENT`.
+
 ### Technical design
 
 Include goals/non-goals, current architecture evidence, proposed design, data/API/control
 flows, compatibility, security/performance/observability impact, risks, rollout/rollback,
 open decisions, and a requirement-to-design matrix.
+
+Before design, compare demand-related structure records with current code. Add
+`结构一致性检查` and declare `STRUCTURE_STATUS: CONSISTENT|UPDATED`; update stale records
+before writing the proposal. Add `功能变更树` with `CHANGE_TREE_STATUS: INCLUDED` and a text
+tree that makes the full functional scope visible at a glance.
 
 Add `架构与流程图`. Use `DIAGRAM_STATUS: INCLUDED` with a Mermaid architecture, sequence,
 state, or data-flow diagram when it improves verification. Otherwise use
@@ -57,8 +71,15 @@ Include approved design version, change boundaries, file/module/symbol-level cha
 per-change details and reasons, requirement IDs, compatibility/migration notes, sequencing,
 risks, prohibited changes, and a design-to-code matrix. Product code must remain untouched.
 
+Repeat the demand-related structure/code consistency check before planning. Add
+`代码变更树` with file/module/symbol branches and `CHANGE_TREE_STATUS: INCLUDED`.
+
 Add `改动关系图` under the same diagram status contract. Prefer file/module dependencies,
 changed call chains, or control flow; do not add decorative diagrams.
+
+Technical and code-plan Markdown artifacts declare `PRESENTATION_FORMAT: MD` by default.
+Use `HTML` only when necessary for precision and provide a same-name `.html` sidecar of at
+least 500 bytes. The Markdown file remains authoritative and retains the change tree.
 
 ### Test design
 
@@ -90,12 +111,27 @@ Record highlights, defects, root causes, and concrete next-iteration improvement
 Include `根因`, `经验总结`, and `下次复用规则`. Harnove extracts these sections together with
 scores, highlights, defects, and improvements into a new immutable file in `improve/`.
 
+### Project structure refresh
+
+After tests pass and before summary, reconcile the actual Git diff with persistent structure
+records. Update every affected module/framework/relationship record, declare
+`STRUCTURE_STATUS: UPDATED`, and cite changed files or symbols. Summary cannot begin until
+the persistent structure hash changes and the refreshed records pass the three-part contract.
+
 ## Experience reuse contract
 
 At initialization, snapshot every prior `improve/*.md` record and hash into
 `00-input/*经验复用上下文.md`. Each stage must state which experience it adopted and why any
 apparently relevant rule was not applicable. Never modify a historical experience file;
 later summaries add new files so the library grows monotonically.
+
+## Structure knowledge contract
+
+At iteration initialization, snapshot existing `.md` and `.html` structure records and hashes
+into `00-input/*项目结构上下文*.md`. Structure is project-owned and grows with the codebase.
+Technical design and code planning must verify demand-relevant records against current code;
+inconsistency must be corrected before design. Exclude `structure/` from Harnove self-release
+packages and product Git evidence just like `iterations/` and `improve/`.
 
 ## Subagent isolation contract
 

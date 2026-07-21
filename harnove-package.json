@@ -1,7 +1,12 @@
 {
   "name": "harnove",
-  "version": "4.0.0",
-  "config_schema_version": 2,
+  "version": "4.1.0",
+  "config_schema_version": 3,
+  "version_policy": {
+    "fix_or_optimization": "increment_patch_c",
+    "new_feature": "increment_minor_b",
+    "architecture_change": "increment_major_a"
+  },
   "core_files": [
     "harnove-package.json",
     "harnove.config.example.json",
@@ -13,6 +18,7 @@
     "adapters/cursor/harnove.md",
     "references/artifact-contracts.md",
     "scripts/harnove.py",
+    "scripts/version_policy.py",
     "scripts/export_package.py",
     "scripts/self_test.py",
     "scripts/install_self_test.py",
@@ -25,6 +31,7 @@
     "skill/",
     "iterations/",
     "improve/",
+    "structure/",
     ".agents/skills/harnove/",
     ".claude/skills/harnove/",
     ".cursor/commands/harnove.md"
