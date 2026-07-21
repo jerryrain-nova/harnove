@@ -121,22 +121,26 @@ def main() -> None:
         if "structure_root" not in config:
             config["structure_root"] = "structure"
             config_changed = True
+        if "custom_root" not in config:
+            config["custom_root"] = "custom"
+            config_changed = True
         gates = config.setdefault("required_human_gates", [])
         if "prd_intake" not in gates:
             gates.insert(0, "prd_intake")
             config_changed = True
-        if config.get("schema_version", 1) < 3:
-            config["schema_version"] = 3
+        if config.get("schema_version", 1) < 4:
+            config["schema_version"] = 4
             config_changed = True
     else:
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config = {
-            "schema_version": 3,
+            "schema_version": 4,
             "project_root": relative_or_absolute(project, install_root),
             "repo_root": ".",
             "archive_root": args.archive_dir,
             "improve_root": "improve",
             "structure_root": "structure",
+            "custom_root": "custom",
             "skill": f"skill/{SKILL_NAME}",
             "platform_entrypoints": {
                 "codex": f".agents/skills/{SKILL_NAME}",
@@ -152,13 +156,23 @@ def main() -> None:
     archive_root = (install_root / config.get("archive_root", "iterations")).resolve()
     improve_root = (install_root / config.get("improve_root", "improve")).resolve()
     structure_root = (install_root / config.get("structure_root", "structure")).resolve()
-    for label, managed_root in [("archive_root", archive_root), ("improve_root", improve_root), ("structure_root", structure_root)]:
+    custom_root = (install_root / config.get("custom_root", "custom")).resolve()
+    for label, managed_root in [("archive_root", archive_root), ("improve_root", improve_root), ("structure_root", structure_root), ("custom_root", custom_root)]:
         try:
             managed_root.relative_to(install_root)
         except ValueError as exc:
             raise SystemExit(f"{label} 必须位于 Harnove 统一目录内") from exc
         managed_root.mkdir(parents=True, exist_ok=True)
-        (managed_root / ".gitkeep").touch(exist_ok=True)
+        if label != "custom_root":
+            (managed_root / ".gitkeep").touch(exist_ok=True)
+    custom_defaults = {
+        "user.md": "# 用户个性化诉求\n\n暂无。用户对本项目的长期约束、偏好和额外诉求记录在此。\n",
+        "self.md": "# Harnove 项目经验\n\n暂无。Harnove 将在需求完成后追加从用户反馈中提炼的可复用经验。\n",
+    }
+    for name, content in custom_defaults.items():
+        target = custom_root / name
+        if not target.exists():
+            target.write_text(content, encoding="utf-8")
     if config_changed:
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -178,6 +192,7 @@ def main() -> None:
     print(f"迭代归档: {archive_root}")
     print(f"经验沉淀: {improve_root}")
     print(f"项目结构知识: {structure_root}")
+    print(f"项目自定义上下文: {custom_root}")
     print(f"使用文档: {install_root / 'USAGE.md'}")
     print(f"下一步: {install_root / 'run.ps1'} init --iteration-id <ID> --requirement <名称> (--prd <路径> | --description <描述>)")
     print("运行后由主 Agent 为每个环节派发全新的隔离子 Agent。")

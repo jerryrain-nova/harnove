@@ -1,13 +1,13 @@
 ---
 name: harnove
-description: Orchestrate a Harnove software iteration from an existing PRD or natural-language requirement using fresh isolated subagents, persistent project-structure knowledge, structure-verified technical and code design, mandatory human gates, Mermaid and change-tree artifacts, Harnove-local archives, and reusable improvement history.
+description: Orchestrate a Harnove software iteration from an existing PRD or natural-language requirement using fresh isolated subagents, project-specific custom instructions, persistent structure knowledge, structure-verified designs, mandatory human gates, visual artifacts, Harnove-local archives, and reusable experience.
 ---
 
 # Orchestrate a Harnove iteration
 
 Locate the nearest Harnove `config.json`; treat its parent as `HARNOVE_HOME`. Use
 `HARNOVE_HOME/runtime/harnove.py` as the authoritative state machine and read
-`references/artifact-contracts.md` completely. Keep `iterations/`, `improve/`, and `structure/` under
+`references/artifact-contracts.md` completely. Keep `iterations/`, `improve/`, `structure/`, and `custom/` under
 `HARNOVE_HOME`; never create them at the product repository root.
 
 ## Keep the main Agent orchestration-only
@@ -24,8 +24,8 @@ For every `(stage, version)`:
 4. Spawn a fresh platform-native subagent and give it only the generated work-order path.
    Never reuse a subagent across stages, versions, rejections, clarification revisions, or
    test-fix cycles. If the platform cannot create subagents, stop and report the limitation.
-5. Monitor the child. The child may work only within the work order, must read the frozen PRD
-   experience context, and current structure knowledge, and must not call Harnove state
+5. Monitor the child. The child may work only within the work order, must read the frozen PRD,
+   custom context, experience context, and current structure knowledge, and must not call Harnove state
    commands or approve a gate.
 6. On success, run `agent-complete ... --result succeeded --evidence <summary>`. On failure,
    run it with `failed`; on timeout/crash use `abandon --reason <reason>`, then dispatch a new
@@ -70,7 +70,7 @@ approval alone freezes the candidate PRD and advances the workflow.
 - `structure_refresh`: after tests pass, inspect the actual diff and update persistent
   structure records so they describe the completed code. This stage must change structure.
 - `summary`: reconcile all evidence, score every stage, identify root causes, extract reusable
-  experience, and specify next-iteration reuse rules.
+  experience, and summarize rules learned from user clarifications, review feedback, and custom updates.
 
 Candidate PRD, technical design, code plan, and test design require real human approval.
 
@@ -106,7 +106,21 @@ Require every subagent to read the iteration's `00-input/*经验复用上下文.
 experience, and explain why irrelevant guidance does not apply. On successful summary
 submission, Harnove writes an immutable experience record under `HARNOVE_HOME/improve/`.
 Future iterations automatically snapshot the accumulated records. Never package, publish,
-or include `iterations/`, `improve/`, or `structure/` in product Git evidence when iterating Harnove itself.
+or include `iterations/`, `improve/`, `structure/`, or `custom/` in product Git evidence when iterating Harnove itself.
+
+## Apply project custom instructions
+
+Treat `HARNOVE_HOME/custom/` as project-owned context similar to `AGENTS.md`. Ensure `user.md`
+and `self.md` always exist; avoid additional files unless they are necessary. Snapshot and read
+both before beginning an iteration, and require every fresh subagent to read that snapshot.
+`user.md` stores durable user constraints and preferences; `self.md` stores Harnove's reusable
+lessons for this project. When the user adds a durable request during an iteration, record it
+before the next child is dispatched with `customize --target user --content <text> --actor <name>`.
+
+In the final summary, declare `FEEDBACK_EXPERIENCE_STATUS: CAPTURED` when user clarification,
+review feedback, or custom updates exist, and distill them into concrete reusable rules. On
+successful completion, Harnove appends that section to `custom/self.md`. If no feedback exists,
+declare `FEEDBACK_EXPERIENCE_STATUS: NONE`; do not fabricate experience.
 
 ## Version Harnove itself
 

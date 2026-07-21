@@ -34,12 +34,16 @@ def main() -> None:
         assert config["archive_root"] == "iterations"
         assert config["improve_root"] == "improve"
         assert config["structure_root"] == "structure"
+        assert config["custom_root"] == "custom"
         assert (project / ".harnove" / "iterations").is_dir()
         assert (project / ".harnove" / "improve").is_dir()
         assert (project / ".harnove" / "structure").is_dir()
+        assert (project / ".harnove" / "custom" / "user.md").is_file()
+        assert (project / ".harnove" / "custom" / "self.md").is_file()
         assert not (project / "iterations").exists()
         assert not (project / "improve").exists()
         assert not (project / "structure").exists()
+        assert not (project / "custom").exists()
         assert (project / ".harnove" / "skill" / "harnove" / "SKILL.md").is_file()
         assert (project / ".harnove" / "runtime" / "harnove.py").is_file()
         assert (project / ".agents" / "skills" / "harnove" / "SKILL.md").is_file()
@@ -48,12 +52,15 @@ def main() -> None:
         assert not (project / "docs").exists()
 
         # Reinstallation is idempotent and project-local config remains owner-managed.
+        custom_user = project / ".harnove" / "custom" / "user.md"
+        custom_user.write_text("# 用户个性化诉求\n\n保留此项目规则。\n", encoding="utf-8")
         config["archive_root"] = "iteration-records"
         (project / ".harnove" / "config.json").write_text(
             json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
         run(str(plugin / "init.py"), "--project", str(project))
         assert json.loads((project / ".harnove" / "config.json").read_text(encoding="utf-8"))["archive_root"] == "iteration-records"
+        assert "保留此项目规则" in custom_user.read_text(encoding="utf-8")
 
         # Installed runtime discovers config from its own location, independent of cwd.
         runtime = project / ".harnove" / "runtime" / "harnove.py"
@@ -83,6 +90,8 @@ def main() -> None:
         assert (copied_plugin / "iterations").is_dir()
         assert (copied_plugin / "improve").is_dir()
         assert (copied_plugin / "structure").is_dir()
+        assert (copied_plugin / "custom" / "user.md").is_file()
+        assert (copied_plugin / "custom" / "self.md").is_file()
         assert not (copied_project / ".harnove").exists()
         assert (copied_project / ".agents" / "skills" / "harnove" / "SKILL.md").is_file()
         assert (copied_project / ".claude" / "skills" / "harnove" / "SKILL.md").is_file()
@@ -96,6 +105,7 @@ def main() -> None:
         assert not (copied_project / "iterations").exists()
         assert not (copied_project / "improve").exists()
         assert not (copied_project / "structure").exists()
+        assert not (copied_project / "custom").exists()
 
         # Unsafe owner configuration fails closed instead of writing outside Harnove.
         bad_config = json.loads((copied_plugin / "config.json").read_text(encoding="utf-8"))
@@ -104,7 +114,7 @@ def main() -> None:
         result = run(str(copied_plugin / "runtime" / "harnove.py"), "status", "--archive", "missing", cwd=copied_project, ok=False)
         assert result.returncode != 0
         output = result.stdout + result.stderr
-        assert "archive_root" in output and "improve_root" in output and "structure_root" in output, output
+        assert "archive_root" in output and "improve_root" in output and "structure_root" in output and "custom_root" in output, output
     print("install self-test passed")
 
 

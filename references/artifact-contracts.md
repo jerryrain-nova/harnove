@@ -22,7 +22,7 @@ state.json             workflow state and history
 ```
 
 The archive is always `HARNOVE_HOME/iterations/<iteration>`. Reusable experience lives in
-`HARNOVE_HOME/improve/`; project interpretation lives in `HARNOVE_HOME/structure/`. These directories do not belong to the product source or clean Harnove
+`HARNOVE_HOME/improve/`; project interpretation lives in `HARNOVE_HOME/structure/`; project-specific instructions live in `HARNOVE_HOME/custom/`. These directories do not belong to the product source or clean Harnove
 distribution. Every stage/version uses a new subagent identity and one-time run lease.
 
 ## Required content
@@ -110,6 +110,9 @@ for technical design, code plan, test design, implementation, test execution, an
 Record highlights, defects, root causes, and concrete next-iteration improvements.
 Include `根因`, `经验总结`, and `下次复用规则`. Harnove extracts these sections together with
 scores, highlights, defects, and improvements into a new immutable file in `improve/`.
+Include `用户反馈经验` and exactly one `FEEDBACK_EXPERIENCE_STATUS: CAPTURED|NONE`. When the
+iteration contains clarifications, review feedback, or custom updates, distill concrete reusable
+rules and use `CAPTURED`; Harnove appends this section to `custom/self.md` after completion.
 
 ### Project structure refresh
 
@@ -132,6 +135,17 @@ into `00-input/*项目结构上下文*.md`. Structure is project-owned and grows
 Technical design and code planning must verify demand-relevant records against current code;
 inconsistency must be corrected before design. Exclude `structure/` from Harnove self-release
 packages and product Git evidence just like `iterations/` and `improve/`.
+
+## Custom context contract
+
+Initialization creates and preserves `custom/user.md` and `custom/self.md`. Avoid extra files
+unless the content cannot reasonably belong in these two files. Snapshot all custom Markdown
+with hashes into `00-input/*项目自定义上下文*.md` before iteration work; every subagent reads the
+snapshot before acting. Record durable user preferences in `user.md` and project-specific
+Harnove lessons in `self.md`. Use the controlled `customize` command before dispatching the next
+child so updates are archived and attributable. Exclude `custom/` from clean packages and Git
+evidence. Completion may append feedback-derived lessons to `self.md` but must never remove
+either required file.
 
 ## Subagent isolation contract
 
