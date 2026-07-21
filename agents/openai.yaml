@@ -1,4 +1,4 @@
 interface:
   display_name: "Harnove 研发迭代"
-  short_description: "用隔离子Agent、人工闸门和经验复用驱动可追溯研发迭代"
-  default_prompt: "使用 $harnove，以主Agent编排、隔离子Agent执行的方式启动可追溯研发迭代。"
+  short_description: "用隔离子Agent、结构知识校验和经验复用驱动可追溯研发迭代"
+  default_prompt: "使用 $harnove，以主Agent编排、隔离子Agent执行和结构知识持续校验的方式启动研发迭代。"

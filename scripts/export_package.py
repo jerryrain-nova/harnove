@@ -64,6 +64,7 @@ def main() -> None:
         "name": manifest["name"],
         "version": manifest["version"],
         "config_schema_version": manifest["config_schema_version"],
+        "version_policy": manifest.get("version_policy", {}),
         "files": exported,
     }
     (output / "package-build.json").write_text(
@@ -75,4 +76,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

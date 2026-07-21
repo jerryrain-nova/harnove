@@ -14,34 +14,40 @@ import sys
 import uuid
 from pathlib import Path
 
-STAGES = ["prd_intake", "technical_design", "code_plan", "test_design", "implementation", "test_execution", "summary"]
+STAGES = ["prd_intake", "structure_analysis", "technical_design", "code_plan", "test_design", "implementation", "test_execution", "structure_refresh", "summary"]
 GATED = {"technical_design", "code_plan", "test_design"}
 REVIEW_GATED = GATED | {"prd_intake"}
 DIRS = {
     "prd_intake": "00-input",
+    "structure_analysis": "00-input",
     "technical_design": "01-technical-design",
     "code_plan": "02-code-plan",
     "test_design": "03-test-design",
     "implementation": "04-implementation",
     "test_execution": "05-test-execution",
+    "structure_refresh": "06-summary",
     "summary": "06-summary",
 }
 CN_NAMES = {
     "prd_intake": "候选PRD",
+    "structure_analysis": "项目结构分析",
     "technical_design": "技术方案",
     "code_plan": "代码修改方案",
     "test_design": "测试方案",
     "implementation": "代码变更记录",
     "test_execution": "测试报告",
+    "structure_refresh": "项目结构刷新记录",
     "summary": "迭代总结",
 }
 REQUIRED_SECTIONS = {
     "prd_intake": ["原始需求描述", "目标与背景", "用户与场景", "功能需求", "非功能需求", "范围内", "范围外", "验收标准", "约束与依赖", "信息补充记录", "待确认问题", "用户补充记录"],
-    "technical_design": ["需求依据", "目标与非目标", "现状分析", "技术方案", "架构与流程图", "风险", "回滚", "追溯矩阵"],
-    "code_plan": ["需求依据", "改动范围", "改动细则", "改动关系图", "改动原因", "禁止改动", "追溯矩阵"],
+    "structure_analysis": ["分析范围", "功能模块", "代码框架", "结构定义和关系", "需求相关结构一致性", "结构更新记录", "代码证据"],
+    "technical_design": ["需求依据", "结构一致性检查", "目标与非目标", "现状分析", "技术方案", "功能变更树", "架构与流程图", "风险", "回滚", "追溯矩阵"],
+    "code_plan": ["需求依据", "结构一致性检查", "改动范围", "改动细则", "代码变更树", "改动关系图", "改动原因", "禁止改动", "追溯矩阵"],
     "test_design": ["需求依据", "覆盖策略", "测试用例", "测试目的", "覆盖矩阵"],
     "implementation": ["需求依据", "批准基线", "实际改动", "Git 证据", "方案偏差"],
     "test_execution": ["需求依据", "实际变更审查", "可执行测试", "执行结果", "结论"],
+    "structure_refresh": ["实际变更依据", "受影响结构", "结构更新", "一致性验证", "代码证据"],
     "summary": ["需求背景", "迭代内容", "测试结论", "追溯矩阵", "环节评分", "亮点", "缺点", "根因", "经验总结", "下次复用规则", "改进项"],
 }
 PLACEHOLDER = "<!-- 待填写；所有判断须引用 REQ-xxx 或代码证据。 -->"
@@ -72,7 +78,7 @@ def inside(path: Path, parent: Path) -> bool:
         return False
 
 
-def project_defaults() -> tuple[str, str, str, str]:
+def project_defaults() -> tuple[str, str, str, str, str]:
     runtime_home = Path(__file__).resolve().parent.parent
     direct = runtime_home / "config.json"
     starts = [Path.cwd().resolve(), Path(__file__).resolve().parent]
@@ -93,11 +99,12 @@ def project_defaults() -> tuple[str, str, str, str]:
         repo = (project / config.get("repo_root", ".")).resolve()
         archive = (home / config.get("archive_root", "iterations")).resolve()
         improve = (home / config.get("improve_root", "improve")).resolve()
-        if not inside(archive, home) or not inside(improve, home):
-            raise SystemExit("config.json 中的 archive_root 和 improve_root 必须位于 Harnove 目录内")
-        return str(repo), str(archive), str(improve), str(home)
+        structure = (home / config.get("structure_root", "structure")).resolve()
+        if not inside(archive, home) or not inside(improve, home) or not inside(structure, home):
+            raise SystemExit("config.json 中的 archive_root、improve_root 和 structure_root 必须位于 Harnove 目录内")
+        return str(repo), str(archive), str(improve), str(structure), str(home)
     fallback_home = Path.cwd().resolve()
-    return ".", str(fallback_home / "iterations"), str(fallback_home / "improve"), str(fallback_home)
+    return ".", str(fallback_home / "iterations"), str(fallback_home / "improve"), str(fallback_home / "structure"), str(fallback_home)
 
 
 def load(archive: Path) -> dict:
@@ -105,20 +112,24 @@ def load(archive: Path) -> dict:
     if not path.is_file():
         raise SystemExit(f"找不到状态文件: {path}")
     state = json.loads(path.read_text(encoding="utf-8"))
-    if state.get("schema_version", 1) < 4:
-        _, _, discovered_improve, discovered_home = project_defaults()
+    if state.get("schema_version", 1) < 5:
+        _, _, discovered_improve, discovered_structure, discovered_home = project_defaults()
         inferred_home = archive.parent.parent.resolve()
         migration_home = Path(discovered_home) if inside(archive, Path(discovered_home)) else inferred_home
         migration_improve = Path(discovered_improve) if inside(Path(discovered_improve), migration_home) else migration_home / "improve"
+        migration_structure = Path(discovered_structure) if inside(Path(discovered_structure), migration_home) else migration_home / "structure"
         state.setdefault("harnove_home", str(migration_home))
         state.setdefault("improve_root", str(migration_improve))
+        state.setdefault("structure_root", str(migration_structure))
         state.setdefault("used_agent_ids", [])
-        state.setdefault("history", []).append({"at": now(), "action": "schema_migration", "from": state.get("schema_version", 1), "to": 4})
+        state.setdefault("history", []).append({"at": now(), "action": "schema_migration", "from": state.get("schema_version", 1), "to": 5})
         if state.get("status") == "drafting":
             state["status"] = "awaiting_dispatch"
-        state["schema_version"] = 4
+        state["schema_version"] = 5
         if not state.get("improvement_index") and (archive / "00-input").is_dir():
             state["improvement_index"] = create_improvement_context(archive, state)
+        if not state.get("structure_index") and (archive / "00-input").is_dir():
+            state["structure_index"] = create_structure_context(archive, state)
         save(archive, state)
     return state
 
@@ -141,7 +152,7 @@ def capture_git_evidence(archive: Path, state: dict) -> list[str]:
     folder, version = archive / DIRS["implementation"], state["version"]
     repo = Path(state["repo"]).resolve()
     scope = ["--", "."]
-    for excluded in [Path(state["archive"]).parent, Path(state["improve_root"])]:
+    for excluded in [Path(state["archive"]).parent, Path(state["improve_root"]), Path(state["structure_root"])]:
         if inside(excluded, repo):
             scope.append(f":(exclude){excluded.resolve().relative_to(repo).as_posix()}/**")
     commands = {
@@ -245,16 +256,26 @@ def template(state: dict, stage: str, version: int) -> str:
         f"- 文档版本：v{version:03d}", f"- 角色：{CN_NAMES[stage]}", "- 状态：草稿",
         f"- PRD 快照：`00-input/{state['prd_snapshot']}`", f"- PRD SHA-256：`{state['prd_sha256']}`",
         f"- 经验复用索引：`00-input/{state['improvement_index']}`",
+        f"- 项目结构索引：`00-input/{state['structure_index']}`",
         f"- 仓库基线：`{state.get('git_baseline') or 'GIT_UNAVAILABLE'}`", "",
     ]
+    if stage in {"technical_design", "code_plan"}:
+        lines += ["- 表达格式：`PRESENTATION_FORMAT: MD`", ""]
+    if stage == "structure_analysis":
+        source_mode = "REUSED_AND_VERIFIED" if structure_hashes(Path(state["structure_root"])) else "FULL_REPOSITORY_SCAN"
+        lines += [f"- 结构读取模式：`STRUCTURE_SOURCE: {source_mode}`", ""]
     for section in REQUIRED_SECTIONS[stage]:
         lines += [f"## {section}", "", PLACEHOLDER, ""]
+        if section in {"需求相关结构一致性", "结构一致性检查", "一致性验证"}:
+            lines += ["STRUCTURE_STATUS: CONSISTENT", ""]
+        if section in {"功能变更树", "代码变更树"}:
+            lines += ["CHANGE_TREE_STATUS: INCLUDED", "", "```text", "需求/方案根节点", "├── 待细化变更一", "└── 待细化变更二", "```", ""]
         if section in {"架构与流程图", "改动关系图"}:
             lines += ["DIAGRAM_STATUS: INCLUDED", "", "```mermaid", "flowchart LR", "  A[待细化输入] --> B[待细化处理]", "  B --> C[待细化输出]", "```", ""]
     return "\n".join(lines)
 
 
-def validate_artifact(path: Path, stage: str) -> list[str]:
+def validate_artifact(path: Path, stage: str, state: dict | None = None, last_run: dict | None = None) -> list[str]:
     if not path.is_file():
         return [f"缺少产物: {path}"]
     text = path.read_text(encoding="utf-8")
@@ -266,6 +287,20 @@ def validate_artifact(path: Path, stage: str) -> list[str]:
     if len(text.strip()) < 500:
         errors.append("产物内容过短，无法形成可审核证据")
     if stage in {"technical_design", "code_plan"}:
+        md_format = "PRESENTATION_FORMAT: MD" in text
+        html_format = "PRESENTATION_FORMAT: HTML" in text
+        if md_format == html_format:
+            errors.append("表达格式必须且只能声明 PRESENTATION_FORMAT: MD 或 HTML")
+        elif html_format:
+            html = path.with_suffix(".html")
+            if not html.is_file() or "<html" not in html.read_text(encoding="utf-8", errors="replace").lower() or html.stat().st_size < 500:
+                errors.append("HTML 表达模式必须提供同名、完整且不少于 500 字节的 HTML 文件")
+        tree_section = "功能变更树" if stage == "technical_design" else "代码变更树"
+        tree = section_text(text, tree_section)
+        if "CHANGE_TREE_STATUS: INCLUDED" not in tree or len(re.findall(r"[├└]──", tree)) < 2:
+            errors.append(f"{tree_section}必须包含至少两个清晰的树状变更节点")
+        if "待细化" in tree:
+            errors.append(f"{tree_section}仍包含待细化占位内容")
         included = "DIAGRAM_STATUS: INCLUDED" in text
         not_applicable = "DIAGRAM_STATUS: NOT_APPLICABLE" in text
         if included == not_applicable:
@@ -281,6 +316,31 @@ def validate_artifact(path: Path, stage: str) -> list[str]:
             reason = re.search(r"DIAGRAM_STATUS: NOT_APPLICABLE[\s\S]*?理由[:：]\s*([^\n]+)", text)
             if not reason or len(reason.group(1).strip()) < 20:
                 errors.append("NOT_APPLICABLE 必须给出至少 20 字的具体理由")
+    if stage in {"structure_analysis", "technical_design", "code_plan", "structure_refresh"}:
+        consistent = "STRUCTURE_STATUS: CONSISTENT" in text
+        updated = "STRUCTURE_STATUS: UPDATED" in text
+        if consistent == updated:
+            errors.append("结构检查必须且只能声明 STRUCTURE_STATUS: CONSISTENT 或 UPDATED")
+        if state is not None:
+            current = structure_hashes(Path(state["structure_root"]))
+            before = (last_run or {}).get("structure_before", {})
+            if not current:
+                errors.append("structure 目录为空，必须先完成项目结构解读")
+            else:
+                combined = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in structure_files(Path(state["structure_root"])))
+                for required in ["功能模块", "代码框架", "结构定义和关系"]:
+                    if required not in combined:
+                        errors.append(f"structure 记录缺少必需部分: {required}")
+            if stage == "structure_analysis" and not before and not updated:
+                errors.append("structure 为空时必须扫描全仓并声明 STRUCTURE_STATUS: UPDATED")
+            if stage == "structure_analysis" and not before and "STRUCTURE_SOURCE: FULL_REPOSITORY_SCAN" not in text:
+                errors.append("structure 为空时必须声明 STRUCTURE_SOURCE: FULL_REPOSITORY_SCAN")
+            if stage == "structure_analysis" and before and "STRUCTURE_SOURCE: REUSED_AND_VERIFIED" not in text:
+                errors.append("已有 structure 时必须优先复用并声明 STRUCTURE_SOURCE: REUSED_AND_VERIFIED")
+            if stage == "structure_refresh" and not updated:
+                errors.append("需求完成后必须更新 structure 并声明 STRUCTURE_STATUS: UPDATED")
+            if updated and current == before:
+                errors.append("声明 UPDATED 但 structure 文件内容未发生变化")
     return errors
 
 
@@ -324,6 +384,36 @@ def create_improvement_context(archive: Path, state: dict) -> str:
     return name
 
 
+def structure_files(root: Path) -> list[Path]:
+    if not root.is_dir():
+        return []
+    return sorted(p for p in root.rglob("*") if p.is_file() and p.name != ".gitkeep" and p.suffix.lower() in {".md", ".html"})
+
+
+def structure_hashes(root: Path) -> dict[str, str]:
+    return {p.relative_to(root).as_posix(): digest(p) for p in structure_files(root)}
+
+
+def create_structure_context(archive: Path, state: dict, label: str = "initial") -> str:
+    root = Path(state["structure_root"])
+    root.mkdir(parents=True, exist_ok=True)
+    name = f"{state['iteration_id']}_{state['requirement']}_项目结构上下文_{safe_name(label)}.md"
+    target = archive / "00-input" / name
+    files = structure_files(root)
+    lines = [
+        f"# {state['iteration_id']} {state['requirement']} - 项目结构上下文", "",
+        "优先复用此处记录；设计前必须用需求相关代码验证其时效性。", "",
+    ]
+    if not files:
+        lines += ["## STRUCTURE_EMPTY", "", "structure 当前为空；结构分析子 Agent 必须读取整个项目，并按功能模块、代码框架、结构定义和关系三个部分建立记录。", ""]
+    for item in files:
+        relative = item.relative_to(root).as_posix()
+        language = "html" if item.suffix.lower() == ".html" else "markdown"
+        lines += [f"## {relative}", "", f"- SHA-256：`{digest(item)}`", "", f"```{language}", item.read_text(encoding="utf-8", errors="replace"), "```", ""]
+    target.write_text("\n".join(lines), encoding="utf-8")
+    return name
+
+
 def write_improvement(archive: Path, state: dict, summary: Path) -> Path:
     improve_root = Path(state["improve_root"])
     improve_root.mkdir(parents=True, exist_ok=True)
@@ -347,8 +437,9 @@ def cmd_init(a: argparse.Namespace) -> None:
     root, repo = Path(a.root).resolve(), Path(a.repo).resolve()
     home = Path(getattr(a, "home", root.parent)).resolve()
     improve_root = Path(getattr(a, "improve_root", home / "improve")).resolve()
-    if not inside(root, home) or not inside(improve_root, home):
-        raise SystemExit("迭代归档和 improve 必须位于 Harnove 自身目录内")
+    structure_root = Path(getattr(a, "structure_root", home / "structure")).resolve()
+    if not inside(root, home) or not inside(improve_root, home) or not inside(structure_root, home):
+        raise SystemExit("迭代归档、improve 和 structure 必须位于 Harnove 自身目录内")
     prd_arg = getattr(a, "prd", None)
     description = getattr(a, "description", None)
     description_file = getattr(a, "description_file", None)
@@ -371,13 +462,14 @@ def cmd_init(a: argparse.Namespace) -> None:
         (archive / folder).mkdir(parents=True, exist_ok=True)
     baseline = git(repo, "rev-parse", "HEAD")
     state = {
-        "schema_version": 4, "iteration_id": ident, "requirement": req,
+        "schema_version": 5, "iteration_id": ident, "requirement": req,
         "archive": str(archive), "repo": str(repo), "harnove_home": str(home),
-        "improve_root": str(improve_root), "git_baseline": baseline,
+        "improve_root": str(improve_root), "structure_root": str(structure_root), "git_baseline": baseline,
         "created_at": now(), "history": [], "approved": {}, "test_cycles": 0,
         "stage_versions": {stage: 0 for stage in STAGES}, "used_agent_ids": [],
     }
     state["improvement_index"] = create_improvement_context(archive, state)
+    state["structure_index"] = create_structure_context(archive, state)
 
     if prd_arg:
         prd = Path(prd_arg).resolve()
@@ -431,11 +523,19 @@ def cmd_dispatch(a: argparse.Namespace) -> None:
         "artifact": str(artifact_path(archive, state)), "repo": state["repo"],
         "prd_snapshot": state.get("prd_snapshot") or state.get("original_input_snapshot"),
         "improvement_context": str(archive / "00-input" / state["improvement_index"]),
+        "structure_context": str(archive / "00-input" / state["structure_index"]),
+        "structure_root": state["structure_root"],
+        "structure_before": structure_hashes(Path(state["structure_root"])),
         "approved_inputs": state.get("approved", {}),
-        "write_scope": "artifact_only" if stage not in {"implementation", "test_execution"} else "approved_repo_scope_and_artifact",
+        "write_scope": (
+            "approved_repo_scope_and_artifact" if stage in {"implementation", "test_execution"}
+            else "structure_and_artifact" if stage in {"structure_analysis", "technical_design", "code_plan", "structure_refresh"}
+            else "artifact_only"
+        ),
         "rules": [
             "只执行当前 stage/version，不执行状态机命令或人工审批",
             "读取经验复用上下文并记录采用或不适用的经验",
+            "优先读取 structure 记录；涉及设计时先与需求相关代码核对，不一致则先更新 structure",
             "不得执行其他环节的工作，不得复用本次子 Agent 身份",
         ],
     }
@@ -450,7 +550,7 @@ def cmd_dispatch(a: argparse.Namespace) -> None:
     except FileExistsError as exc:
         order_path.unlink(missing_ok=True)
         raise SystemExit("已有子 Agent 租约，拒绝并发派发") from exc
-    state["active_agent"] = {"run_id": run_id, "agent_id": a.agent_id, "work_order": str(order_path.relative_to(archive)), "started_at": now()}
+    state["active_agent"] = {"run_id": run_id, "agent_id": a.agent_id, "work_order": str(order_path.relative_to(archive)), "started_at": now(), "structure_before": work_order["structure_before"]}
     state.setdefault("used_agent_ids", []).append(a.agent_id)
     state["status"] = "subagent_working"
     state["history"].append({"at": now(), "action": "subagent_dispatch", "stage": stage, "version": version, **state["active_agent"]})
@@ -475,7 +575,7 @@ def cmd_agent_complete(a: argparse.Namespace) -> None:
         raise SystemExit("run-id 与当前活跃子 Agent 不匹配")
     if not a.evidence.strip():
         raise SystemExit("子 Agent 完成记录必须提供 --evidence")
-    record = {"at": now(), "action": "subagent_complete", "stage": state["stage"], "version": state["version"], "run_id": a.run_id, "agent_id": active["agent_id"], "result": a.result, "evidence": a.evidence.strip()}
+    record = {"at": now(), "action": "subagent_complete", "stage": state["stage"], "version": state["version"], "run_id": a.run_id, "agent_id": active["agent_id"], "result": a.result, "evidence": a.evidence.strip(), "structure_before": active.get("structure_before", {})}
     record["record"] = close_agent_lease(archive, a.run_id, a.result, record)
     state["history"].append(record)
     state["last_agent_run"] = record
@@ -549,7 +649,7 @@ def cmd_submit(a: argparse.Namespace) -> None:
         raise SystemExit("当前产物没有匹配的成功子 Agent 执行记录")
     if stage == "prd_intake":
         validate_original_input(archive, state)
-    errors = validate_artifact(path, stage)
+    errors = validate_artifact(path, stage, state, last_run)
     if errors:
         raise SystemExit("提交校验失败:\n- " + "\n- ".join(errors))
     if stage == "prd_intake":
@@ -558,6 +658,12 @@ def cmd_submit(a: argparse.Namespace) -> None:
         cmd_status(argparse.Namespace(archive=str(archive)))
         return
     event = {"at": now(), "action": "submit", "stage": stage, "version": state["version"], "artifact": str(path.relative_to(archive)), "sha256": digest(path)}
+    if stage in {"technical_design", "code_plan"} and "PRESENTATION_FORMAT: HTML" in path.read_text(encoding="utf-8"):
+        html = path.with_suffix(".html")
+        event["html_sidecar"] = {"artifact": str(html.relative_to(archive)), "sha256": digest(html)}
+    if stage in {"structure_analysis", "technical_design", "code_plan", "structure_refresh"}:
+        state["structure_index"] = create_structure_context(archive, state, f"{stage}-v{state['version']:03d}")
+        event["structure_snapshot"] = state["structure_index"]
     if stage == "implementation":
         event["git_evidence"] = capture_git_evidence(archive, state)
     state["history"].append(event)
@@ -631,11 +737,16 @@ def cmd_review(a: argparse.Namespace) -> None:
         raise SystemExit("驳回必须提供可执行的 --feedback")
     stage, version, path = state["stage"], state["version"], artifact_path(archive, state)
     record = {"at": now(), "reviewer": a.reviewer, "decision": a.decision, "stage": stage, "version": version, "artifact": str(path.relative_to(archive)), "sha256": digest(path), "feedback": a.feedback.strip()}
+    if stage in {"technical_design", "code_plan"} and "PRESENTATION_FORMAT: HTML" in path.read_text(encoding="utf-8"):
+        html = path.with_suffix(".html")
+        record["html_sidecar"] = {"artifact": str(html.relative_to(archive)), "sha256": digest(html)}
     review_path = archive / "reviews" / f"{stage}_v{version:03d}_{a.decision}_{dt.datetime.now():%Y%m%d%H%M%S}.json"
     review_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     state["history"].append({**record, "action": "human_review", "record": str(review_path.relative_to(archive))})
     if a.decision == "approve":
         state["approved"][stage] = {"version": version, "artifact": str(path.relative_to(archive)), "sha256": digest(path)}
+        if "html_sidecar" in record:
+            state["approved"][stage]["html_sidecar"] = record["html_sidecar"]
         if stage == "prd_intake":
             state["prd_snapshot"] = path.name
             state["prd_sha256"] = digest(path)
@@ -660,13 +771,14 @@ def cmd_review(a: argparse.Namespace) -> None:
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="人工闸门驱动的研发迭代状态机")
     sub = p.add_subparsers(dest="command", required=True)
-    default_repo, default_archive, default_improve, default_home = project_defaults()
+    default_repo, default_archive, default_improve, default_structure, default_home = project_defaults()
     x = sub.add_parser("init")
     x.add_argument("--iteration-id", required=True); x.add_argument("--requirement", required=True)
     source = x.add_mutually_exclusive_group(required=True)
     source.add_argument("--prd"); source.add_argument("--description"); source.add_argument("--description-file")
     x.add_argument("--repo", default=default_repo); x.add_argument("--root", default=default_archive)
-    x.add_argument("--improve-root", default=default_improve); x.add_argument("--home", default=default_home, help=argparse.SUPPRESS); x.set_defaults(func=cmd_init)
+    x.add_argument("--improve-root", default=default_improve); x.add_argument("--structure-root", default=default_structure)
+    x.add_argument("--home", default=default_home, help=argparse.SUPPRESS); x.set_defaults(func=cmd_init)
     x = sub.add_parser("status"); x.add_argument("--archive", required=True); x.set_defaults(func=cmd_status)
     x = sub.add_parser("dispatch"); x.add_argument("--archive", required=True); x.add_argument("--agent-id", required=True); x.add_argument("--orchestrator", required=True); x.set_defaults(func=cmd_dispatch)
     x = sub.add_parser("agent-complete"); x.add_argument("--archive", required=True); x.add_argument("--run-id", required=True); x.add_argument("--result", required=True, choices=["succeeded", "failed"]); x.add_argument("--evidence", required=True); x.set_defaults(func=cmd_agent_complete)

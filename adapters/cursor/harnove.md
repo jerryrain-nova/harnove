@@ -12,7 +12,9 @@ then follow it as authoritative instructions for this request.
 Remain orchestration-only. For every stage/version, use Cursor's native subagent mechanism to
 create a fresh child from the Harnove work order; never author the artifact or product change
 in the main Agent. If subagents are unavailable, stop and report that Harnove cannot safely
-advance. Keep all iteration and experience data under the discovered Harnove directory.
+advance. Keep all iteration, experience, and project-structure data under the discovered
+Harnove directory. Require children to read `structure/` before repository-wide analysis,
+verify demand-related structure against code before design, and refresh structure after tests.
 
 Treat any text supplied after `/harnove` as either a PRD path or a natural-language iteration
 request. Preserve any supplied PRD as immutable, create a separate candidate PRD, and require

@@ -118,21 +118,25 @@ def main() -> None:
         if "improve_root" not in config:
             config["improve_root"] = "improve"
             config_changed = True
+        if "structure_root" not in config:
+            config["structure_root"] = "structure"
+            config_changed = True
         gates = config.setdefault("required_human_gates", [])
         if "prd_intake" not in gates:
             gates.insert(0, "prd_intake")
             config_changed = True
-        if config.get("schema_version", 1) < 2:
-            config["schema_version"] = 2
+        if config.get("schema_version", 1) < 3:
+            config["schema_version"] = 3
             config_changed = True
     else:
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config = {
-            "schema_version": 2,
+            "schema_version": 3,
             "project_root": relative_or_absolute(project, install_root),
             "repo_root": ".",
             "archive_root": args.archive_dir,
             "improve_root": "improve",
+            "structure_root": "structure",
             "skill": f"skill/{SKILL_NAME}",
             "platform_entrypoints": {
                 "codex": f".agents/skills/{SKILL_NAME}",
@@ -147,7 +151,8 @@ def main() -> None:
 
     archive_root = (install_root / config.get("archive_root", "iterations")).resolve()
     improve_root = (install_root / config.get("improve_root", "improve")).resolve()
-    for label, managed_root in [("archive_root", archive_root), ("improve_root", improve_root)]:
+    structure_root = (install_root / config.get("structure_root", "structure")).resolve()
+    for label, managed_root in [("archive_root", archive_root), ("improve_root", improve_root), ("structure_root", structure_root)]:
         try:
             managed_root.relative_to(install_root)
         except ValueError as exc:
@@ -172,6 +177,7 @@ def main() -> None:
     print("平台入口: Claude Code /harnove; Cursor /harnove; Codex $harnove 或 /skills")
     print(f"迭代归档: {archive_root}")
     print(f"经验沉淀: {improve_root}")
+    print(f"项目结构知识: {structure_root}")
     print(f"使用文档: {install_root / 'USAGE.md'}")
     print(f"下一步: {install_root / 'run.ps1'} init --iteration-id <ID> --requirement <名称> (--prd <路径> | --description <描述>)")
     print("运行后由主 Agent 为每个环节派发全新的隔离子 Agent。")

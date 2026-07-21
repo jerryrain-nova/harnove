@@ -33,10 +33,13 @@ def main() -> None:
         config = json.loads((project / ".harnove" / "config.json").read_text(encoding="utf-8"))
         assert config["archive_root"] == "iterations"
         assert config["improve_root"] == "improve"
+        assert config["structure_root"] == "structure"
         assert (project / ".harnove" / "iterations").is_dir()
         assert (project / ".harnove" / "improve").is_dir()
+        assert (project / ".harnove" / "structure").is_dir()
         assert not (project / "iterations").exists()
         assert not (project / "improve").exists()
+        assert not (project / "structure").exists()
         assert (project / ".harnove" / "skill" / "harnove" / "SKILL.md").is_file()
         assert (project / ".harnove" / "runtime" / "harnove.py").is_file()
         assert (project / ".agents" / "skills" / "harnove" / "SKILL.md").is_file()
@@ -79,6 +82,7 @@ def main() -> None:
         assert (copied_plugin / "skill" / "harnove" / "SKILL.md").is_file()
         assert (copied_plugin / "iterations").is_dir()
         assert (copied_plugin / "improve").is_dir()
+        assert (copied_plugin / "structure").is_dir()
         assert not (copied_project / ".harnove").exists()
         assert (copied_project / ".agents" / "skills" / "harnove" / "SKILL.md").is_file()
         assert (copied_project / ".claude" / "skills" / "harnove" / "SKILL.md").is_file()
@@ -91,6 +95,7 @@ def main() -> None:
         assert len(list((copied_plugin / "iterations").glob("*_ITER-INPLACE_archive-location"))) == 1
         assert not (copied_project / "iterations").exists()
         assert not (copied_project / "improve").exists()
+        assert not (copied_project / "structure").exists()
 
         # Unsafe owner configuration fails closed instead of writing outside Harnove.
         bad_config = json.loads((copied_plugin / "config.json").read_text(encoding="utf-8"))
@@ -99,7 +104,7 @@ def main() -> None:
         result = run(str(copied_plugin / "runtime" / "harnove.py"), "status", "--archive", "missing", cwd=copied_project, ok=False)
         assert result.returncode != 0
         output = result.stdout + result.stderr
-        assert "archive_root" in output and "improve_root" in output, output
+        assert "archive_root" in output and "improve_root" in output and "structure_root" in output, output
     print("install self-test passed")
 
 
