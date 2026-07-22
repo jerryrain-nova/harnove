@@ -14,41 +14,35 @@ import sys
 import uuid
 from pathlib import Path
 
-STAGES = ["prd_intake", "structure_analysis", "technical_design", "code_plan", "test_design", "implementation", "test_execution", "structure_refresh", "summary"]
+STAGES = ["prd_intake", "technical_design", "code_plan", "test_design", "implementation", "test_execution", "summary"]
 GATED = {"technical_design", "code_plan", "test_design"}
 REVIEW_GATED = GATED | {"prd_intake"}
 DIRS = {
     "prd_intake": "00-input",
-    "structure_analysis": "00-input",
     "technical_design": "01-technical-design",
     "code_plan": "02-code-plan",
     "test_design": "03-test-design",
     "implementation": "04-implementation",
     "test_execution": "05-test-execution",
-    "structure_refresh": "06-summary",
     "summary": "06-summary",
 }
 CN_NAMES = {
     "prd_intake": "候选PRD",
-    "structure_analysis": "项目结构分析",
     "technical_design": "技术方案",
     "code_plan": "代码修改方案",
     "test_design": "测试方案",
     "implementation": "代码变更记录",
     "test_execution": "测试报告",
-    "structure_refresh": "项目结构刷新记录",
     "summary": "迭代总结",
 }
 REQUIRED_SECTIONS = {
-    "prd_intake": ["原始需求描述", "目标与背景", "用户与场景", "功能需求", "非功能需求", "范围内", "范围外", "验收标准", "约束与依赖", "信息补充记录", "待确认问题", "用户补充记录"],
-    "structure_analysis": ["分析范围", "功能模块", "代码框架", "结构定义和关系", "需求相关结构一致性", "结构更新记录", "代码证据"],
-    "technical_design": ["需求依据", "结构一致性检查", "目标与非目标", "现状分析", "技术方案", "功能变更树", "架构与流程图", "风险", "回滚", "追溯矩阵"],
-    "code_plan": ["需求依据", "结构一致性检查", "改动范围", "改动细则", "代码变更树", "改动关系图", "改动原因", "禁止改动", "追溯矩阵"],
+    "prd_intake": ["文档总览", "版本核心差异", "原始需求描述", "目标与背景", "用户与场景", "功能需求", "非功能需求", "范围内", "范围外", "验收标准", "约束与依赖", "信息补充记录", "待确认问题", "用户补充记录"],
+    "technical_design": ["方案总览", "版本核心差异", "需求依据", "实时代码架构依据", "目标与非目标", "现状分析", "技术方案", "功能变更树", "架构与流程图", "风险", "回滚", "追溯矩阵"],
+    "code_plan": ["变更总览", "版本核心差异", "需求依据", "实时代码架构依据", "改动范围", "改动细则", "代码变更树", "改动关系图", "改动原因", "禁止改动", "追溯矩阵"],
     "test_design": ["需求依据", "覆盖策略", "测试用例", "测试目的", "覆盖矩阵"],
     "implementation": ["需求依据", "批准基线", "实际改动", "Git 证据", "方案偏差"],
     "test_execution": ["需求依据", "实际变更审查", "可执行测试", "执行结果", "结论"],
-    "structure_refresh": ["实际变更依据", "受影响结构", "结构更新", "一致性验证", "代码证据"],
-    "summary": ["需求背景", "迭代内容", "测试结论", "追溯矩阵", "用户反馈经验", "环节评分", "亮点", "缺点", "根因", "经验总结", "下次复用规则", "改进项"],
+    "summary": ["总结总览", "需求背景", "迭代内容", "测试结论", "追溯矩阵", "项目结构抽象", "用户反馈经验", "环节评分", "亮点", "缺点", "根因", "经验总结", "下次复用规则", "改进项"],
 }
 PLACEHOLDER = "<!-- 待填写；所有判断须引用 REQ-xxx 或代码证据。 -->"
 
@@ -78,7 +72,7 @@ def inside(path: Path, parent: Path) -> bool:
         return False
 
 
-def project_defaults() -> tuple[str, str, str, str, str, str]:
+def project_defaults() -> tuple[str, str, str, str, str, str, str]:
     runtime_home = Path(__file__).resolve().parent.parent
     direct = runtime_home / "config.json"
     starts = [Path.cwd().resolve(), Path(__file__).resolve().parent]
@@ -103,9 +97,10 @@ def project_defaults() -> tuple[str, str, str, str, str, str]:
         custom = (home / config.get("custom_root", "custom")).resolve()
         if not all(inside(path, home) for path in [archive, improve, structure, custom]):
             raise SystemExit("config.json 中的 archive_root、improve_root、structure_root 和 custom_root 必须位于 Harnove 目录内")
-        return str(repo), str(archive), str(improve), str(structure), str(custom), str(home)
+        branch_pattern = config.get("default_branch_pattern", "tmp/{iteration_name}-{implementation_version}")
+        return str(repo), str(archive), str(improve), str(structure), str(custom), str(home), branch_pattern
     fallback_home = Path.cwd().resolve()
-    return ".", str(fallback_home / "iterations"), str(fallback_home / "improve"), str(fallback_home / "structure"), str(fallback_home / "custom"), str(fallback_home)
+    return ".", str(fallback_home / "iterations"), str(fallback_home / "improve"), str(fallback_home / "structure"), str(fallback_home / "custom"), str(fallback_home), "tmp/{iteration_name}-{implementation_version}"
 
 
 def load(archive: Path) -> dict:
@@ -113,8 +108,8 @@ def load(archive: Path) -> dict:
     if not path.is_file():
         raise SystemExit(f"找不到状态文件: {path}")
     state = json.loads(path.read_text(encoding="utf-8"))
-    if state.get("schema_version", 1) < 6:
-        _, _, discovered_improve, discovered_structure, discovered_custom, discovered_home = project_defaults()
+    if state.get("schema_version", 1) < 7:
+        _, _, discovered_improve, discovered_structure, discovered_custom, discovered_home, discovered_branch_pattern = project_defaults()
         inferred_home = archive.parent.parent.resolve()
         migration_home = Path(discovered_home) if inside(archive, Path(discovered_home)) else inferred_home
         migration_improve = Path(discovered_improve) if inside(Path(discovered_improve), migration_home) else migration_home / "improve"
@@ -125,14 +120,22 @@ def load(archive: Path) -> dict:
         state.setdefault("structure_root", str(migration_structure))
         state.setdefault("custom_root", str(migration_custom))
         state.setdefault("used_agent_ids", [])
-        state.setdefault("history", []).append({"at": now(), "action": "schema_migration", "from": state.get("schema_version", 1), "to": 6})
+        state.setdefault("iteration_name", state.get("requirement", "iteration"))
+        state.setdefault("default_branch_pattern", discovered_branch_pattern)
+        old_schema = state.get("schema_version", 1)
+        if state.get("stage") in {"structure_analysis", "structure_refresh"}:
+            if state.get("status") == "subagent_working":
+                raise SystemExit("旧迭代正停留在已移除的 structure 阶段；请用原版本结束该子 Agent 后再升级")
+            state["stage"] = "technical_design" if state["stage"] == "structure_analysis" else "summary"
+            state["version"] = state.get("stage_versions", {}).get(state["stage"], 0) + 1
+            state.setdefault("stage_versions", {})[state["stage"]] = state["version"]
+            state["status"] = "awaiting_dispatch"
+        state.setdefault("history", []).append({"at": now(), "action": "schema_migration", "from": old_schema, "to": 7})
         if state.get("status") == "drafting":
             state["status"] = "awaiting_dispatch"
-        state["schema_version"] = 6
+        state["schema_version"] = 7
         if not state.get("improvement_index") and (archive / "00-input").is_dir():
             state["improvement_index"] = create_improvement_context(archive, state)
-        if not state.get("structure_index") and (archive / "00-input").is_dir():
-            state["structure_index"] = create_structure_context(archive, state)
         if not state.get("custom_index") and (archive / "00-input").is_dir():
             state["custom_index"] = create_custom_context(archive, state)
         save(archive, state)
@@ -194,11 +197,23 @@ def prd_template(state: dict, source_summary: str, version: int) -> str:
     return f"""# {state['iteration_id']} {state['requirement']} - 候选 PRD
 
 - 文档版本：v{version:03d}
+- 迭代名称：{state['iteration_name']}
 - 输入类型：{state['prd_source_type']}
 - 原始输入：`{state['original_input_snapshot']}`
 - 原始输入 SHA-256：`{state['original_input_sha256']}`
 - 状态标记：`PRD_STATUS: NEEDS_CLARIFICATION`
 - 规则：原始文件只读；所有补充必须记录依据；不得把推测写成已确认需求。
+
+## 文档总览
+
+- 需求目标：待从原始输入提炼。
+- 核心范围：待明确。
+- 关键验收：待明确。
+- 当前决策：仍需完成需求整理与边界确认。
+
+## 版本核心差异
+
+首版候选 PRD，无上一版本；后续版本必须概括相对上一版新增、修改和删除的核心内容。
 
 ## 原始需求描述
 
@@ -257,23 +272,20 @@ def prd_template(state: dict, source_summary: str, version: int) -> str:
 def template(state: dict, stage: str, version: int) -> str:
     lines = [
         f"# {state['iteration_id']} {state['requirement']} - {CN_NAMES[stage]}", "",
-        f"- 迭代编号：{state['iteration_id']}", f"- 需求名称：{state['requirement']}",
+        f"- 迭代编号：{state['iteration_id']}", f"- 迭代名称：{state['iteration_name']}", f"- 需求名称：{state['requirement']}",
         f"- 文档版本：v{version:03d}", f"- 角色：{CN_NAMES[stage]}", "- 状态：草稿",
         f"- PRD 快照：`00-input/{state['prd_snapshot']}`", f"- PRD SHA-256：`{state['prd_sha256']}`",
         f"- 经验复用索引：`00-input/{state['improvement_index']}`",
-        f"- 项目结构索引：`00-input/{state['structure_index']}`",
         f"- 项目自定义上下文：`00-input/{state['custom_index']}`",
         f"- 仓库基线：`{state.get('git_baseline') or 'GIT_UNAVAILABLE'}`", "",
     ]
     if stage in {"technical_design", "code_plan"}:
         lines += ["- 表达格式：`PRESENTATION_FORMAT: MD`", ""]
-    if stage == "structure_analysis":
-        source_mode = "REUSED_AND_VERIFIED" if structure_hashes(Path(state["structure_root"])) else "FULL_REPOSITORY_SCAN"
-        lines += [f"- 结构读取模式：`STRUCTURE_SOURCE: {source_mode}`", ""]
     for section in REQUIRED_SECTIONS[stage]:
-        lines += [f"## {section}", "", PLACEHOLDER, ""]
-        if section in {"需求相关结构一致性", "结构一致性检查", "一致性验证"}:
-            lines += ["STRUCTURE_STATUS: CONSISTENT", ""]
+        initial = PLACEHOLDER
+        if section == "版本核心差异" and version == 1:
+            initial = "首版文档，无上一版本；本节用于后续版本概括核心变化。"
+        lines += [f"## {section}", "", initial, ""]
         if section in {"功能变更树", "代码变更树"}:
             lines += ["CHANGE_TREE_STATUS: INCLUDED", "", "```text", "需求/方案根节点", "├── 待细化变更一", "└── 待细化变更二", "```", ""]
         if section in {"架构与流程图", "改动关系图"}:
@@ -281,6 +293,8 @@ def template(state: dict, stage: str, version: int) -> str:
         if section == "用户反馈经验":
             status = "CAPTURED" if user_feedback_items(state) else "NONE"
             lines += [f"FEEDBACK_EXPERIENCE_STATUS: {status}", ""]
+        if section == "项目结构抽象":
+            lines += ["STRUCTURE_STATUS: UPDATED", "", "总结阶段必须依据完成后的实时代码更新 structure/，覆盖功能模块、代码框架、结构定义和关系，并引用代码证据。", ""]
     return "\n".join(lines)
 
 
@@ -289,12 +303,27 @@ def validate_artifact(path: Path, stage: str, state: dict | None = None, last_ru
         return [f"缺少产物: {path}"]
     text = path.read_text(encoding="utf-8")
     errors = [f"缺少章节: {s}" for s in REQUIRED_SECTIONS[stage] if f"## {s}" not in text]
+    positions = [text.find(f"## {section}") for section in REQUIRED_SECTIONS[stage]]
+    if all(position >= 0 for position in positions) and positions != sorted(positions):
+        errors.append("文档章节顺序不符合契约；总览和版本差异必须位于细则之前")
     if "REQ-" not in text:
         errors.append("未引用任何稳定需求 ID（REQ-xxx）")
+    if state is not None and state.get("iteration_name") not in text:
+        errors.append("产物缺少用户确认的迭代名称")
     if "<!--" in text:
         errors.append("仍存在未填写的模板占位符")
     if len(text.strip()) < 500:
         errors.append("产物内容过短，无法形成可审核证据")
+    if stage in {"prd_intake", "technical_design", "code_plan"}:
+        overview = {"prd_intake": "文档总览", "technical_design": "方案总览", "code_plan": "变更总览"}[stage]
+        if len(section_text(text, overview)) < 60:
+            errors.append(f"{overview}过短，必须在文档开头集中说明目标、范围、关键决策和风险/验收重点")
+        differences = section_text(text, "版本核心差异")
+        version = (state or {}).get("version", 1)
+        if version > 1 and (len(differences) < 40 or "上一版" not in differences or "首版" in differences):
+            errors.append("迭代版本必须在“版本核心差异”中明确概括相对上一版的核心变化")
+        if stage in {"technical_design", "code_plan"} and len(section_text(text, "实时代码架构依据")) < 60:
+            errors.append("实时代码架构依据过短，必须记录本轮直接检查的文件、符号和架构结论")
     if stage in {"technical_design", "code_plan"}:
         md_format = "PRESENTATION_FORMAT: MD" in text
         html_format = "PRESENTATION_FORMAT: HTML" in text
@@ -325,31 +354,19 @@ def validate_artifact(path: Path, stage: str, state: dict | None = None, last_ru
             reason = re.search(r"DIAGRAM_STATUS: NOT_APPLICABLE[\s\S]*?理由[:：]\s*([^\n]+)", text)
             if not reason or len(reason.group(1).strip()) < 20:
                 errors.append("NOT_APPLICABLE 必须给出至少 20 字的具体理由")
-    if stage in {"structure_analysis", "technical_design", "code_plan", "structure_refresh"}:
-        consistent = "STRUCTURE_STATUS: CONSISTENT" in text
-        updated = "STRUCTURE_STATUS: UPDATED" in text
-        if consistent == updated:
-            errors.append("结构检查必须且只能声明 STRUCTURE_STATUS: CONSISTENT 或 UPDATED")
-        if state is not None:
-            current = structure_hashes(Path(state["structure_root"]))
-            before = (last_run or {}).get("structure_before", {})
-            if not current:
-                errors.append("structure 目录为空，必须先完成项目结构解读")
-            else:
-                combined = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in structure_files(Path(state["structure_root"])))
-                for required in ["功能模块", "代码框架", "结构定义和关系"]:
-                    if required not in combined:
-                        errors.append(f"structure 记录缺少必需部分: {required}")
-            if stage == "structure_analysis" and not before and not updated:
-                errors.append("structure 为空时必须扫描全仓并声明 STRUCTURE_STATUS: UPDATED")
-            if stage == "structure_analysis" and not before and "STRUCTURE_SOURCE: FULL_REPOSITORY_SCAN" not in text:
-                errors.append("structure 为空时必须声明 STRUCTURE_SOURCE: FULL_REPOSITORY_SCAN")
-            if stage == "structure_analysis" and before and "STRUCTURE_SOURCE: REUSED_AND_VERIFIED" not in text:
-                errors.append("已有 structure 时必须优先复用并声明 STRUCTURE_SOURCE: REUSED_AND_VERIFIED")
-            if stage == "structure_refresh" and not updated:
-                errors.append("需求完成后必须更新 structure 并声明 STRUCTURE_STATUS: UPDATED")
-            if updated and current == before:
-                errors.append("声明 UPDATED 但 structure 文件内容未发生变化")
+    if stage == "summary" and state is not None:
+        current = structure_hashes(Path(state["structure_root"]))
+        before = (last_run or {}).get("structure_before", {})
+        structure_section = section_text(text, "项目结构抽象")
+        if "STRUCTURE_STATUS: UPDATED" not in structure_section:
+            errors.append("总结阶段必须声明 STRUCTURE_STATUS: UPDATED")
+        if not current or current == before:
+            errors.append("总结阶段必须依据完成后的实时代码更新 structure 文件")
+        else:
+            combined = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in structure_files(Path(state["structure_root"])))
+            for required in ["功能模块", "代码框架", "结构定义和关系"]:
+                if required not in combined:
+                    errors.append(f"structure 抽象缺少必需部分: {required}")
     if stage == "summary" and state is not None:
         feedback = user_feedback_items(state)
         section = section_text(text, "用户反馈经验")
@@ -416,26 +433,6 @@ def structure_files(root: Path) -> list[Path]:
 
 def structure_hashes(root: Path) -> dict[str, str]:
     return {p.relative_to(root).as_posix(): digest(p) for p in structure_files(root)}
-
-
-def create_structure_context(archive: Path, state: dict, label: str = "initial") -> str:
-    root = Path(state["structure_root"])
-    root.mkdir(parents=True, exist_ok=True)
-    name = f"{state['iteration_id']}_{state['requirement']}_项目结构上下文_{safe_name(label)}.md"
-    target = archive / "00-input" / name
-    files = structure_files(root)
-    lines = [
-        f"# {state['iteration_id']} {state['requirement']} - 项目结构上下文", "",
-        "优先复用此处记录；设计前必须用需求相关代码验证其时效性。", "",
-    ]
-    if not files:
-        lines += ["## STRUCTURE_EMPTY", "", "structure 当前为空；结构分析子 Agent 必须读取整个项目，并按功能模块、代码框架、结构定义和关系三个部分建立记录。", ""]
-    for item in files:
-        relative = item.relative_to(root).as_posix()
-        language = "html" if item.suffix.lower() == ".html" else "markdown"
-        lines += [f"## {relative}", "", f"- SHA-256：`{digest(item)}`", "", f"```{language}", item.read_text(encoding="utf-8", errors="replace"), "```", ""]
-    target.write_text("\n".join(lines), encoding="utf-8")
-    return name
 
 
 CUSTOM_DEFAULTS = {
@@ -537,22 +534,23 @@ def cmd_init(a: argparse.Namespace) -> None:
     if description is not None and not description.strip():
         raise SystemExit("自然语言描述不能为空")
 
-    ident, req = safe_name(a.iteration_id), safe_name(a.requirement)
-    archive = root / f"{dt.date.today():%Y%m%d}_{ident}_{req}"
+    ident, iteration_name, req = safe_name(a.iteration_id), safe_name(a.iteration_name), safe_name(a.requirement)
+    archive = root / f"{dt.date.today():%Y%m%d}_{ident}_{iteration_name}"
     if archive.exists():
         raise SystemExit(f"归档目录已存在: {archive}")
     for folder in sorted(set(DIRS.values())) + ["reviews", "00-input/clarifications", "agent-runs"]:
         (archive / folder).mkdir(parents=True, exist_ok=True)
     baseline = git(repo, "rev-parse", "HEAD")
     state = {
-        "schema_version": 6, "iteration_id": ident, "requirement": req,
+        "schema_version": 7, "iteration_id": ident, "iteration_name": iteration_name, "requirement": req,
+        "default_branch_pattern": getattr(a, "branch_pattern", "tmp/{iteration_name}-{implementation_version}"),
         "archive": str(archive), "repo": str(repo), "harnove_home": str(home),
         "improve_root": str(improve_root), "structure_root": str(structure_root), "custom_root": str(custom_root), "git_baseline": baseline,
         "created_at": now(), "history": [], "approved": {}, "test_cycles": 0,
         "stage_versions": {stage: 0 for stage in STAGES}, "used_agent_ids": [],
     }
+    structure_root.mkdir(parents=True, exist_ok=True)
     state["improvement_index"] = create_improvement_context(archive, state)
-    state["structure_index"] = create_structure_context(archive, state)
     state["custom_index"] = create_custom_context(archive, state)
 
     if prd_arg:
@@ -599,38 +597,83 @@ def cmd_dispatch(a: argparse.Namespace) -> None:
         raise SystemExit(f"当前状态 {state['status']} 不允许派发子 Agent")
     if a.agent_id in state.get("used_agent_ids", []):
         raise SystemExit("agent-id 已在本次迭代使用；每个环节/版本必须使用全新的子 Agent")
+    lease = archive / "agent-runs" / "active.lease"
+    if lease.exists():
+        raise SystemExit("已有子 Agent 租约，拒绝并发派发")
     run_id = uuid.uuid4().hex
     stage, version = state["stage"], state["version"]
+    branch_record = None
+    created_new_branch = False
+    if stage == "implementation":
+        repo = Path(state["repo"]).resolve()
+        branch_pattern = state.get("default_branch_pattern", "tmp/{iteration_name}-{implementation_version}")
+        placeholders = re.findall(r"{([^{}]+)}", branch_pattern)
+        stripped_pattern = re.sub(r"{(?:iteration_name|implementation_version)}", "", branch_pattern)
+        if set(placeholders) != {"iteration_name", "implementation_version"} or "{" in stripped_pattern or "}" in stripped_pattern:
+            raise SystemExit("default_branch_pattern 必须且只能包含 {iteration_name} 和 {implementation_version}")
+        try:
+            default_branch = branch_pattern.format(
+                iteration_name=safe_name(state["iteration_name"]), implementation_version=version,
+            )
+        except (KeyError, ValueError) as exc:
+            raise SystemExit("default_branch_pattern 只能使用 {iteration_name} 和 {implementation_version}") from exc
+        prior_preparation = next(
+            (item for item in reversed(state.get("implementation_branches", [])) if item.get("stage_version") == version),
+            None,
+        )
+        branch = getattr(a, "branch", None) or (prior_preparation or {}).get("name") or default_branch
+        if prior_preparation and getattr(a, "branch", None) and a.branch != prior_preparation["name"]:
+            raise SystemExit(f"实施版本 v{version:03d} 已准备分支 {prior_preparation['name']}，重派不得改用其他分支")
+        check = subprocess.run(["git", "check-ref-format", "--branch", branch], text=True, capture_output=True)
+        if check.returncode != 0:
+            raise SystemExit(f"无效的实施分支名称: {branch}")
+        previous = git(repo, "branch", "--show-current")
+        if previous is None:
+            raise SystemExit("代码实施要求可用的 Git 仓库，无法识别当前分支")
+        switch_args = ["switch", branch] if prior_preparation else ["switch", "-c", branch]
+        switch = subprocess.run(
+            ["git", "-C", str(repo), *switch_args], text=True, encoding="utf-8",
+            errors="replace", capture_output=True, timeout=30,
+        )
+        if switch.returncode != 0:
+            raise SystemExit(f"创建并切换实施分支失败: {switch.stderr.strip() or switch.stdout.strip()}")
+        if prior_preparation:
+            branch_record = {**prior_preparation, "reused_for_redispatch": True}
+        else:
+            created_new_branch = True
+            branch_record = {"name": branch, "previous_branch": previous, "prepared_at": now(), "source": "user_or_custom" if getattr(a, "branch", None) else "default"}
     work_order = {
         "run_id": run_id, "agent_id": a.agent_id, "orchestrator": a.orchestrator,
         "stage": stage, "version": version, "created_at": now(),
         "artifact": str(artifact_path(archive, state)), "repo": state["repo"],
         "prd_snapshot": state.get("prd_snapshot") or state.get("original_input_snapshot"),
         "improvement_context": str(archive / "00-input" / state["improvement_index"]),
-        "structure_context": str(archive / "00-input" / state["structure_index"]),
         "structure_root": state["structure_root"],
-        "structure_before": structure_hashes(Path(state["structure_root"])),
+        "structure_before": structure_hashes(Path(state["structure_root"])) if stage == "summary" else {},
         "custom_context": str(archive / "00-input" / state["custom_index"]),
         "custom_root": state["custom_root"],
         "approved_inputs": state.get("approved", {}),
         "write_scope": (
             "approved_repo_scope_and_artifact" if stage in {"implementation", "test_execution"}
-            else "structure_and_artifact" if stage in {"structure_analysis", "technical_design", "code_plan", "structure_refresh"}
+            else "structure_and_artifact" if stage == "summary"
             else "artifact_only"
         ),
         "rules": [
             "只执行当前 stage/version，不执行状态机命令或人工审批",
             "读取经验复用上下文并记录采用或不适用的经验",
             "开始当前环节前读取项目自定义上下文，遵守 user.md 约束并复用 self.md 经验",
-            "优先读取 structure 记录；涉及设计时先与需求相关代码核对，不一致则先更新 structure",
+            "需求、技术和代码方案不得把 structure 作为架构输入；必须直接检查当前仓库代码",
+            "技术方案和代码方案必须引用本次实时读取的文件或符号证据",
+            "summary 环节依据完成后的当前代码更新 structure 抽象，覆盖功能模块、代码框架、结构定义和关系",
             "summary 环节必须根据澄清、审核反馈和 custom 更新提炼用户反馈经验",
             "不得执行其他环节的工作，不得复用本次子 Agent 身份",
         ],
     }
+    if branch_record:
+        work_order["implementation_branch"] = branch_record
     runs = archive / "agent-runs"
     order_path = runs / f"{stage}_v{version:03d}_{run_id}_work-order.json"
     order_path.write_text(json.dumps(work_order, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    lease = runs / "active.lease"
     try:
         with lease.open("x", encoding="utf-8") as f:
             json.dump(work_order, f, ensure_ascii=False, indent=2)
@@ -639,6 +682,10 @@ def cmd_dispatch(a: argparse.Namespace) -> None:
         order_path.unlink(missing_ok=True)
         raise SystemExit("已有子 Agent 租约，拒绝并发派发") from exc
     state["active_agent"] = {"run_id": run_id, "agent_id": a.agent_id, "work_order": str(order_path.relative_to(archive)), "started_at": now(), "structure_before": work_order["structure_before"]}
+    if branch_record:
+        state["active_agent"]["implementation_branch"] = branch_record
+    if created_new_branch:
+        state.setdefault("implementation_branches", []).append({"stage_version": version, **branch_record})
     state.setdefault("used_agent_ids", []).append(a.agent_id)
     state["status"] = "subagent_working"
     state["history"].append({"at": now(), "action": "subagent_dispatch", "stage": stage, "version": version, **state["active_agent"]})
@@ -664,6 +711,8 @@ def cmd_agent_complete(a: argparse.Namespace) -> None:
     if not a.evidence.strip():
         raise SystemExit("子 Agent 完成记录必须提供 --evidence")
     record = {"at": now(), "action": "subagent_complete", "stage": state["stage"], "version": state["version"], "run_id": a.run_id, "agent_id": active["agent_id"], "result": a.result, "evidence": a.evidence.strip(), "structure_before": active.get("structure_before", {})}
+    if active.get("implementation_branch"):
+        record["implementation_branch"] = active["implementation_branch"]
     record["record"] = close_agent_lease(archive, a.run_id, a.result, record)
     state["history"].append(record)
     state["last_agent_run"] = record
@@ -681,7 +730,7 @@ def cmd_abandon(a: argparse.Namespace) -> None:
 
 def cmd_status(a: argparse.Namespace) -> None:
     archive, state = Path(a.archive).resolve(), load(Path(a.archive).resolve())
-    keys = ["iteration_id", "requirement", "prd_source_type", "stage", "version", "status", "test_cycles", "active_agent"]
+    keys = ["iteration_id", "iteration_name", "requirement", "prd_source_type", "stage", "version", "status", "test_cycles", "active_agent"]
     payload = {k: state.get(k) for k in keys}
     payload["next_action"] = {
         "awaiting_dispatch": "spawn_fresh_subagent_then_dispatch",
@@ -737,6 +786,11 @@ def cmd_submit(a: argparse.Namespace) -> None:
         raise SystemExit("当前产物没有匹配的成功子 Agent 执行记录")
     if stage == "prd_intake":
         validate_original_input(archive, state)
+    if stage == "implementation":
+        expected_branch = (last_run.get("implementation_branch") or {}).get("name")
+        current_branch = git(Path(state["repo"]), "branch", "--show-current")
+        if not expected_branch or current_branch != expected_branch:
+            raise SystemExit(f"实施产物必须在已准备分支提交；期望 {expected_branch}，当前 {current_branch}")
     errors = validate_artifact(path, stage, state, last_run)
     if errors:
         raise SystemExit("提交校验失败:\n- " + "\n- ".join(errors))
@@ -749,9 +803,8 @@ def cmd_submit(a: argparse.Namespace) -> None:
     if stage in {"technical_design", "code_plan"} and "PRESENTATION_FORMAT: HTML" in path.read_text(encoding="utf-8"):
         html = path.with_suffix(".html")
         event["html_sidecar"] = {"artifact": str(html.relative_to(archive)), "sha256": digest(html)}
-    if stage in {"structure_analysis", "technical_design", "code_plan", "structure_refresh"}:
-        state["structure_index"] = create_structure_context(archive, state, f"{stage}-v{state['version']:03d}")
-        event["structure_snapshot"] = state["structure_index"]
+    if stage == "summary":
+        event["structure_hashes"] = structure_hashes(Path(state["structure_root"]))
     if stage == "implementation":
         event["git_evidence"] = capture_git_evidence(archive, state)
     state["history"].append(event)
@@ -900,16 +953,16 @@ def cmd_review(a: argparse.Namespace) -> None:
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="人工闸门驱动的研发迭代状态机")
     sub = p.add_subparsers(dest="command", required=True)
-    default_repo, default_archive, default_improve, default_structure, default_custom, default_home = project_defaults()
+    default_repo, default_archive, default_improve, default_structure, default_custom, default_home, default_branch_pattern = project_defaults()
     x = sub.add_parser("init")
-    x.add_argument("--iteration-id", required=True); x.add_argument("--requirement", required=True)
+    x.add_argument("--iteration-id", required=True); x.add_argument("--iteration-name", required=True); x.add_argument("--requirement", required=True)
     source = x.add_mutually_exclusive_group(required=True)
     source.add_argument("--prd"); source.add_argument("--description"); source.add_argument("--description-file")
     x.add_argument("--repo", default=default_repo); x.add_argument("--root", default=default_archive)
     x.add_argument("--improve-root", default=default_improve); x.add_argument("--structure-root", default=default_structure); x.add_argument("--custom-root", default=default_custom)
-    x.add_argument("--home", default=default_home, help=argparse.SUPPRESS); x.set_defaults(func=cmd_init)
+    x.add_argument("--home", default=default_home, help=argparse.SUPPRESS); x.add_argument("--branch-pattern", default=default_branch_pattern, help=argparse.SUPPRESS); x.set_defaults(func=cmd_init)
     x = sub.add_parser("status"); x.add_argument("--archive", required=True); x.set_defaults(func=cmd_status)
-    x = sub.add_parser("dispatch"); x.add_argument("--archive", required=True); x.add_argument("--agent-id", required=True); x.add_argument("--orchestrator", required=True); x.set_defaults(func=cmd_dispatch)
+    x = sub.add_parser("dispatch"); x.add_argument("--archive", required=True); x.add_argument("--agent-id", required=True); x.add_argument("--orchestrator", required=True); x.add_argument("--branch", help="实施阶段使用的用户指定分支名；省略时使用 tmp/{迭代名称}-{实施轮次}"); x.set_defaults(func=cmd_dispatch)
     x = sub.add_parser("agent-complete"); x.add_argument("--archive", required=True); x.add_argument("--run-id", required=True); x.add_argument("--result", required=True, choices=["succeeded", "failed"]); x.add_argument("--evidence", required=True); x.set_defaults(func=cmd_agent_complete)
     x = sub.add_parser("abandon"); x.add_argument("--archive", required=True); x.add_argument("--run-id", required=True); x.add_argument("--reason", required=True); x.set_defaults(func=cmd_abandon)
     x = sub.add_parser("submit"); x.add_argument("--archive", required=True); x.add_argument("--result", choices=["needs-clarification", "ready", "passed", "failed"]); x.set_defaults(func=cmd_submit)

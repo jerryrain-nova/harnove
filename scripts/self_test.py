@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import tempfile
 from contextlib import redirect_stdout
 from io import StringIO
@@ -17,7 +18,7 @@ import version_policy
 def ns_init(root: Path, iteration: str, requirement: str, **source: object) -> argparse.Namespace:
     return argparse.Namespace(
         root=str(root / "iterations"), improve_root=str(root / "improve"), structure_root=str(root / "structure"), custom_root=str(root / "custom"), home=str(root),
-        repo=str(root), iteration_id=iteration, requirement=requirement,
+        repo=str(root), iteration_id=iteration, iteration_name=requirement, requirement=requirement,
         prd=source.get("prd"), description=source.get("description"),
         description_file=source.get("description_file"),
     )
@@ -28,31 +29,35 @@ def fill_current(archive: Path) -> None:
     path = harnove.artifact_path(archive, state)
     text = path.read_text(encoding="utf-8").replace(
         harnove.PLACEHOLDER,
-        "REQ-001：依据已批准 PRD。本节记录结论、边界、历史经验采用情况与预期结果。",
+        "REQ-001：依据已批准 PRD。本节优先记录目标、范围、关键决策、验收或风险重点，并补充边界、历史经验采用情况、代码证据与预期结果。",
     )
+    if state["version"] > 1 and "## 版本核心差异" in text:
+        generic = "REQ-001：依据已批准 PRD。本节优先记录目标、范围、关键决策、验收或风险重点，并补充边界、历史经验采用情况、代码证据与预期结果。"
+        text = text.replace(
+            f"## 版本核心差异\n\n{generic}",
+            "## 版本核心差异\n\n相对上一版，本版根据审核意见补充回滚证据、收紧方案边界，并记录修改原因；其余已批准决策保持不变。",
+            1,
+        )
     text = text.replace("待细化输入", "需求输入").replace("待细化处理", "方案处理").replace("待细化输出", "可验证输出")
     text = text.replace("待细化变更一", "订单导出功能").replace("待细化变更二", "权限与数量边界")
     structure_file = Path(state["structure_root"]) / "project-structure.md"
-    if state["stage"] == "structure_analysis":
+    if state["stage"] == "summary":
         structure_file.write_text(
             "# 项目结构解读\n\n## 功能模块\n\n订单模块负责查询与导出。\n\n"
-            "## 代码框架\n\n采用分层服务结构。\n\n## 结构定义和关系\n\n控制器调用服务，服务访问仓储。\n",
+            "## 代码框架\n\n采用分层服务结构。\n\n## 结构定义和关系\n\n控制器调用服务，服务访问仓储。\n\n"
+            "## 代码证据\n\n依据当前仓库中的 prd.md 与已完成迭代 Git diff 抽象。\n",
             encoding="utf-8",
         )
-        text = text.replace("STRUCTURE_STATUS: CONSISTENT", "STRUCTURE_STATUS: UPDATED")
-    elif state["stage"] == "structure_refresh":
-        structure_file.write_text(structure_file.read_text(encoding="utf-8") + "\n## 本次刷新\n\nREQ-001 已完成，导出关系已核验。\n", encoding="utf-8")
-        text = text.replace("STRUCTURE_STATUS: CONSISTENT", "STRUCTURE_STATUS: UPDATED")
     if state["stage"] in {"technical_design", "code_plan"}:
         text += "\nDIAGRAM_STATUS: INCLUDED\n\n```mermaid\nflowchart LR\n  A[输入] --> B[处理]\n  B --> C[输出]\n```\n"
     text += "\n" + ("REQ-001 的范围证据、实现约束与验证说明。" * 40) + "\n"
     path.write_text(text, encoding="utf-8")
 
 
-def run_subagent(archive: Path, writer=None) -> str:
+def run_subagent(archive: Path, writer=None, branch: str | None = None) -> str:
     before = harnove.load(archive)
     agent_id = f"agent-{before['stage']}-v{before['version']}-{len(before.get('used_agent_ids', [])) + 1}"
-    harnove.cmd_dispatch(argparse.Namespace(archive=str(archive), agent_id=agent_id, orchestrator="smoke-main"))
+    harnove.cmd_dispatch(argparse.Namespace(archive=str(archive), agent_id=agent_id, orchestrator="smoke-main", branch=branch))
     state = harnove.load(archive)
     run_id = state["active_agent"]["run_id"]
     (writer or fill_current)(archive)
@@ -62,8 +67,8 @@ def run_subagent(archive: Path, writer=None) -> str:
     return run_id
 
 
-def submit(archive: Path, result: str | None = None) -> None:
-    run_subagent(archive)
+def submit(archive: Path, result: str | None = None, branch: str | None = None) -> None:
+    run_subagent(archive, branch=branch)
     harnove.cmd_submit(argparse.Namespace(archive=str(archive), result=result))
 
 
@@ -73,11 +78,20 @@ def review(archive: Path, decision: str, feedback: str = "") -> None:
     ))
 
 
-def write_intake_file(path: Path, status: str, questions: str, supplement: str = "暂无。") -> None:
+def write_intake_file(path: Path, status: str, questions: str, supplement: str, iteration_name: str) -> None:
     detail = "用户需要批量导出订单；所有未明确能力均不进入本次范围。" * 25
     path.write_text(f"""# 候选 PRD
 
 - 状态标记：`PRD_STATUS: {status}`
+- 迭代名称：{iteration_name}
+
+## 文档总览
+
+REQ-001：目标是在订单页提供受现有权限边界约束的批量导出；范围只包含列表入口与结果，关键验收聚焦格式、数量上限和无权限处理，不引入定时任务或新权限体系。
+
+## 版本核心差异
+
+相对上一版，本版集中体现新增、修改或删除的需求边界、验收决策及其原因，并明确记录变更来源和取舍理由。
 
 ## 原始需求描述
 
@@ -134,13 +148,16 @@ REQ-001：满足已确认格式和数量边界时生成可下载文件。
 def intake_writer(status: str, questions: str, supplement: str = "暂无。"):
     def write(archive: Path) -> None:
         state = harnove.load(archive)
-        write_intake_file(harnove.artifact_path(archive, state), status, questions, supplement)
+        write_intake_file(harnove.artifact_path(archive, state), status, questions, supplement, state["iteration_name"])
     return write
 
 
 def test_existing_prd(root: Path) -> Path:
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
     prd = root / "prd.md"
     prd.write_text("# PRD\n\nREQ-001：只实现明确范围。\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "prd.md"], check=True)
+    subprocess.run(["git", "-C", str(root), "-c", "user.name=Harnove Test", "-c", "user.email=harnove@example.invalid", "commit", "-qm", "baseline"], check=True)
     harnove.cmd_init(ns_init(root, "SMOKE-001", "state-machine", prd=str(prd)))
     archive = next((root / "iterations").glob("*_SMOKE-001_state-machine"))
     state = harnove.load(archive)
@@ -174,15 +191,13 @@ def test_existing_prd(root: Path) -> Path:
     harnove.cmd_submit(argparse.Namespace(archive=str(archive), result="ready"))
     review(archive, "approve")
 
-    assert harnove.load(archive)["stage"] == "structure_analysis"
-    submit(archive)
     assert harnove.load(archive)["stage"] == "technical_design"
 
     # Diagram contract accepts a real Mermaid block and rejects a content-free N/A escape.
     fill_current(archive)
     design_path = harnove.artifact_path(archive, harnove.load(archive))
     valid_design = design_path.read_text(encoding="utf-8")
-    assert not harnove.validate_artifact(design_path, "technical_design")
+    assert not harnove.validate_artifact(design_path, "technical_design", harnove.load(archive))
     design_path.write_text(valid_design.replace("DIAGRAM_STATUS: INCLUDED", "DIAGRAM_STATUS: NOT_APPLICABLE").replace("```mermaid", "```text"), encoding="utf-8")
     assert any("NOT_APPLICABLE" in error for error in harnove.validate_artifact(design_path, "technical_design"))
     design_path.write_text(valid_design, encoding="utf-8")
@@ -190,7 +205,7 @@ def test_existing_prd(root: Path) -> Path:
     design_path.write_text(html_design, encoding="utf-8")
     html_path = design_path.with_suffix(".html")
     html_path.write_text("<html><body>" + ("结构关系可视化说明" * 80) + "</body></html>", encoding="utf-8")
-    assert not harnove.validate_artifact(design_path, "technical_design", harnove.load(archive), {"structure_before": harnove.structure_hashes(Path(harnove.load(archive)["structure_root"]))})
+    assert not harnove.validate_artifact(design_path, "technical_design", harnove.load(archive))
     html_path.unlink()
     design_path.write_text(valid_design, encoding="utf-8")
 
@@ -198,12 +213,16 @@ def test_existing_prd(root: Path) -> Path:
     submit(archive); review(archive, "approve")
     submit(archive); review(archive, "approve")
     submit(archive); review(archive, "approve")
+    assert not harnove.structure_files(Path(harnove.load(archive)["structure_root"]))
     submit(archive)
+    first_branch = harnove.load(archive)["implementation_branches"][-1]["name"]
+    assert first_branch == "tmp/state-machine-1"
     submit(archive, "failed")
     assert harnove.load(archive)["stage"] == "implementation"
-    submit(archive)
+    submit(archive, branch="feature/state-machine-fix-round-2")
+    second_branch = harnove.load(archive)["implementation_branches"][-1]["name"]
+    assert second_branch == "feature/state-machine-fix-round-2"
     submit(archive, "passed")
-    submit(archive)
     assert harnove.load(archive)["stage"] == "summary"
     submit(archive)
     state = harnove.load(archive)
@@ -212,9 +231,9 @@ def test_existing_prd(root: Path) -> Path:
     assert len(state["used_agent_ids"]) == len(set(state["used_agent_ids"]))
     assert len(list((archive / "agent-runs").glob("*_work-order.json"))) == len(state["used_agent_ids"])
     improvement = Path(state["improvement_record"]["path"])
-    assert improvement.is_file() and improvement.parent == root / "improve"
+    assert improvement.is_file() and improvement.parent.resolve() == (root / "improve").resolve()
     custom_experience = Path(state["custom_experience_record"]["path"])
-    assert custom_experience == root / "custom" / "self.md"
+    assert custom_experience.resolve() == (root / "custom" / "self.md").resolve()
     assert "FEEDBACK_EXPERIENCE_STATUS: CAPTURED" in custom_experience.read_text(encoding="utf-8")
     return improvement
 
@@ -227,8 +246,6 @@ def test_natural_language_reuses_experience(root: Path, improvement: Path) -> No
     archive = next((root / "iterations").glob("*_SMOKE-002_order-export"))
     context = archive / "00-input" / harnove.load(archive)["improvement_index"]
     assert improvement.name in context.read_text(encoding="utf-8")
-    structure_context = archive / "00-input" / harnove.load(archive)["structure_index"]
-    assert "project-structure.md" in structure_context.read_text(encoding="utf-8")
     custom_context = archive / "00-input" / harnove.load(archive)["custom_index"]
     custom_text = custom_context.read_text(encoding="utf-8")
     assert "user.md" in custom_text and "self.md" in custom_text and "权限边界" in custom_text
@@ -248,15 +265,15 @@ def test_natural_language_reuses_experience(root: Path, improvement: Path) -> No
     harnove.cmd_submit(argparse.Namespace(archive=str(archive), result="ready"))
     review(archive, "approve")
     state = harnove.load(archive)
-    assert state["stage"] == "structure_analysis" and state["status"] == "awaiting_dispatch"
-    assert "STRUCTURE_SOURCE: REUSED_AND_VERIFIED" in harnove.artifact_path(archive, state).read_text(encoding="utf-8")
-    submit(archive)
-    assert harnove.load(archive)["stage"] == "technical_design"
+    assert state["stage"] == "technical_design" and state["status"] == "awaiting_dispatch"
+    harnove.cmd_dispatch(argparse.Namespace(archive=str(archive), agent_id="live-code-design", orchestrator="smoke-main", branch=None))
+    work_order = json.loads((archive / harnove.load(archive)["active_agent"]["work_order"]).read_text(encoding="utf-8"))
+    assert "structure_context" not in work_order
 
 
 def main() -> None:
     package = json.loads((Path(__file__).resolve().parent.parent / "harnove-package.json").read_text(encoding="utf-8"))
-    assert version_policy.expected(version_policy.parse("4.1.0"), "feature") == version_policy.parse(package["version"])
+    assert version_policy.expected(version_policy.parse("4.2.0"), "architecture") == version_policy.parse(package["version"])
     with tempfile.TemporaryDirectory(prefix="harnove-") as tmp, redirect_stdout(StringIO()):
         root = Path(tmp)
         improvement = test_existing_prd(root)

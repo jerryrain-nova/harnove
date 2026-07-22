@@ -35,6 +35,7 @@ def main() -> None:
         assert config["improve_root"] == "improve"
         assert config["structure_root"] == "structure"
         assert config["custom_root"] == "custom"
+        assert config["default_branch_pattern"] == "tmp/{iteration_name}-{implementation_version}"
         assert (project / ".harnove" / "iterations").is_dir()
         assert (project / ".harnove" / "improve").is_dir()
         assert (project / ".harnove" / "structure").is_dir()
@@ -64,7 +65,10 @@ def main() -> None:
 
         # Installed runtime discovers config from its own location, independent of cwd.
         runtime = project / ".harnove" / "runtime" / "harnove.py"
-        run(str(runtime), "init", "--iteration-id", "ITER-001", "--requirement", "portable",
+        missing_name = run(str(runtime), "init", "--iteration-id", "ITER-MISSING-NAME", "--requirement", "portable",
+            "--prd", str(prd), cwd=Path(temp), ok=False)
+        assert missing_name.returncode != 0 and "--iteration-name" in (missing_name.stdout + missing_name.stderr)
+        run(str(runtime), "init", "--iteration-id", "ITER-001", "--iteration-name", "portable", "--requirement", "portable",
             "--prd", str(prd), cwd=Path(temp))
         archives = list((project / ".harnove" / "iteration-records").glob("*_ITER-001_portable"))
         assert len(archives) == 1
@@ -100,7 +104,7 @@ def main() -> None:
         copied_prd = copied_project / "copied-prd.md"
         copied_prd.write_text("# PRD\n\nREQ-001：原位安装归档验证。\n", encoding="utf-8")
         run(str(copied_plugin / "runtime" / "harnove.py"), "init", "--iteration-id", "ITER-INPLACE",
-            "--requirement", "archive-location", "--prd", str(copied_prd), cwd=copied_project)
+            "--iteration-name", "archive-location", "--requirement", "archive-location", "--prd", str(copied_prd), cwd=copied_project)
         assert len(list((copied_plugin / "iterations").glob("*_ITER-INPLACE_archive-location"))) == 1
         assert not (copied_project / "iterations").exists()
         assert not (copied_project / "improve").exists()

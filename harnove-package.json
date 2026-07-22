@@ -1,7 +1,7 @@
 {
   "name": "harnove",
-  "version": "4.2.0",
-  "config_schema_version": 4,
+  "version": "5.0.0",
+  "config_schema_version": 5,
   "version_policy": {
     "fix_or_optimization": "increment_patch_c",
     "new_feature": "increment_minor_b",
