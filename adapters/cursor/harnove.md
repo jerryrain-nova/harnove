@@ -26,4 +26,13 @@ otherwise ask only for the iteration ID, confirmed iteration name, requirement n
 description. For natural language, draft the candidate PRD and actively clarify material
 ambiguities according to the canonical skill before technical design begins.
 
+At every reviewed document gate (candidate PRD, technical design, code plan, and test design),
+feedback is a proposal rather than permission to rewrite. Do not create a new version or start a
+child after feedback. First combine all feedback with the current artifact, explain which sections
+would change and why, and ask the user to approve implementation or add feedback. Recompute this
+preview until the user explicitly approves it; only then create the next version and dispatch a
+fresh child. Every reviewed document puts a concise overview and previous-version differences
+before details. Version v002 and later add a summarized evolution ordered from the current
+version through v001; never modify historical artifacts to retrofit that section.
+
 Never approve a human gate on the user's behalf and never invent scope beyond the PRD.
