@@ -1,11 +1,12 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "project_root": "..",
   "repo_root": ".",
   "archive_root": "iterations",
   "improve_root": "improve",
   "structure_root": "structure",
   "custom_root": "custom",
+  "default_branch_pattern": "tmp/{iteration_name}-{implementation_version}",
   "skill": "skill/harnove",
   "platform_entrypoints": {
     "codex": ".agents/skills/harnove",

@@ -1,4 +1,4 @@
 interface:
   display_name: "Harnove 研发迭代"
-  short_description: "用项目自定义规则、隔离子Agent和结构知识驱动可追溯研发迭代"
-  default_prompt: "使用 $harnove，先读取项目 custom 规则，再以隔离子Agent和结构知识校验启动研发迭代。"
+  short_description: "用实时代码、独立分支和隔离子Agent驱动可追溯研发迭代"
+  default_prompt: "使用 $harnove，先建议并确认迭代名称，再以实时代码证据、独立实施分支和隔离子Agent启动研发迭代。"

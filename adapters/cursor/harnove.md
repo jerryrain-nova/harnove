@@ -14,13 +14,15 @@ create a fresh child from the Harnove work order; never author the artifact or p
 in the main Agent. If subagents are unavailable, stop and report that Harnove cannot safely
 advance. Keep all iteration, experience, project-structure, and custom data under the discovered
 Harnove directory. Require children to read the frozen `custom/user.md` and `custom/self.md`
-context before acting, and read `structure/` before repository-wide analysis,
-verify demand-related structure against code before design, and refresh structure after tests.
+context before acting. Requirements, technical design, and code planning inspect the live
+repository and never read `structure/` as architecture input. Update structure abstraction
+only during summary after tests pass.
 
 Treat any text supplied after `/harnove` as either a PRD path or a natural-language iteration
-request. Preserve any supplied PRD as immutable, create a separate candidate PRD, and require
+request. Before initialization, propose a concise branch-safe iteration name and require the
+user to accept it or provide another. Preserve any supplied PRD as immutable, create a separate candidate PRD, and require
 explicit user approval of that candidate before technical design. If no usable input is supplied, report current status when an archive is identifiable;
-otherwise ask only for the iteration ID, requirement name, and either a PRD or a requirement
+otherwise ask only for the iteration ID, confirmed iteration name, requirement name, and either a PRD or a requirement
 description. For natural language, draft the candidate PRD and actively clarify material
 ambiguities according to the canonical skill before technical design begins.
 

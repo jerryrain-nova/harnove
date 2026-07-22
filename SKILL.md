@@ -1,6 +1,6 @@
 ---
 name: harnove
-description: Orchestrate a Harnove software iteration from an existing PRD or natural-language requirement using fresh isolated subagents, project-specific custom instructions, persistent structure knowledge, structure-verified designs, mandatory human gates, visual artifacts, Harnove-local archives, and reusable experience.
+description: Orchestrate a Harnove software iteration from an existing PRD or natural-language requirement using a user-confirmed iteration name, fresh isolated subagents, live repository inspection, implementation branches, mandatory human gates, visual artifacts, Harnove-local archives, post-completion structure abstraction, and reusable experience.
 ---
 
 # Orchestrate a Harnove iteration
@@ -9,6 +9,13 @@ Locate the nearest Harnove `config.json`; treat its parent as `HARNOVE_HOME`. Us
 `HARNOVE_HOME/runtime/harnove.py` as the authoritative state machine and read
 `references/artifact-contracts.md` completely. Keep `iterations/`, `improve/`, `structure/`, and `custom/` under
 `HARNOVE_HOME`; never create them at the product repository root.
+
+## Confirm the iteration name before initialization
+
+Read the requirement input and propose one concise, branch-safe iteration name that expresses
+the business change. Ask the user to confirm the suggestion or provide a replacement. Do not
+run `init` until the user explicitly supplies or accepts the name. Pass the confirmed value
+through `--iteration-name`; never silently derive or substitute it.
 
 ## Keep the main Agent orchestration-only
 
@@ -20,12 +27,14 @@ For every `(stage, version)`:
 
 1. Check `status`; require `awaiting_dispatch`.
 2. Choose a globally new subagent/task ID for this iteration.
-3. Run `dispatch --archive <dir> --agent-id <id> --orchestrator <name>`.
+3. Run `dispatch --archive <dir> --agent-id <id> --orchestrator <name>`. For implementation,
+   inspect the custom snapshot for a user branch rule and pass the resolved exact name through
+   `--branch`; otherwise let Harnove use its default branch.
 4. Spawn a fresh platform-native subagent and give it only the generated work-order path.
    Never reuse a subagent across stages, versions, rejections, clarification revisions, or
    test-fix cycles. If the platform cannot create subagents, stop and report the limitation.
 5. Monitor the child. The child may work only within the work order, must read the frozen PRD,
-   custom context, experience context, and current structure knowledge, and must not call Harnove state
+   custom context and experience context, and must not call Harnove state
    commands or approve a gate.
 6. On success, run `agent-complete ... --result succeeded --evidence <summary>`. On failure,
    run it with `failed`; on timeout/crash use `abandon --reason <reason>`, then dispatch a new
@@ -53,26 +62,34 @@ approval alone freezes the candidate PRD and advances the workflow.
 
 ## Execute isolated stages
 
-- `structure_analysis`: read `HARNOVE_HOME/structure/` first. If records exist, inspect only
-  demand-relevant code to verify them. If empty, inspect the full repository and create
-  structure records split into `功能模块`, `代码框架`, and `结构定义和关系`. Record code evidence.
-- `technical_design`: document repository evidence, architecture, flows, constraints, risks,
-  rollout, rollback, traceability, and relevant historical experience. Before designing,
-  verify demand-related structure records against current code and update stale records.
+- `technical_design`: inspect the current repository directly and document file/symbol evidence,
+  architecture, flows, constraints, risks, rollout, rollback, traceability, and relevant
+  historical experience. Never use `structure/` as an architecture input.
 - `code_plan`: specify file/module/symbol scope, exact rules, boundaries, rationale, risks,
-  sequencing, prohibited changes, and traceability. Recheck demand-related structure records
-  against current code and update them before planning. Do not modify product code.
+  sequencing, prohibited changes, and traceability. Re-read the relevant current code before
+  planning; never use `structure/` as an architecture input. Do not modify product code.
 - `test_design`: cover every requirement and planned change with purpose, preconditions,
   steps, expected result, type, priority, and edge/failure behavior. Do not modify code.
-- `implementation`: modify only approved scope and record deviations and Git evidence.
+- `implementation`: start only after `dispatch` creates and switches to a new branch. Use the
+  user's branch rule when present; otherwise use `tmp/{iteration-name}-{implementation-version}`.
+  Modify only approved scope and record deviations and Git evidence.
 - `test_execution`: inspect the actual diff, implement and run executable tests, then submit
   `passed|failed`. Failure creates a new implementation version and fresh child.
-- `structure_refresh`: after tests pass, inspect the actual diff and update persistent
-  structure records so they describe the completed code. This stage must change structure.
-- `summary`: reconcile all evidence, score every stage, identify root causes, extract reusable
-  experience, and summarize rules learned from user clarifications, review feedback, and custom updates.
+- `summary`: reconcile all evidence, inspect the completed current repository, and update
+  `structure/` with an abstract current-project view covering `功能模块`, `代码框架`, and
+  `结构定义和关系` plus code evidence. Then score every stage, identify root causes, extract
+  reusable experience, and summarize rules learned from user feedback. Structure abstraction
+  happens only here.
 
 Candidate PRD, technical design, code plan, and test design require real human approval.
+
+## Put decisions before details
+
+Candidate PRDs, technical designs, and code plans must begin with their required overview and
+`版本核心差异` sections. Keep the overview decision-oriented: goal, scope, key decision, and
+acceptance or risk focus. Put supporting analysis, tables, and detailed rules afterward. For
+version 2 or later, compare with the immediately previous version and summarize core additions,
+removals, changed decisions, and reasons; do not merely repeat the document.
 
 ## Use diagrams when they improve comprehension
 
@@ -91,14 +108,14 @@ precisely, set `PRESENTATION_FORMAT: HTML` and create a same-name `.html` sideca
 iteration archive. Use HTML only when it materially improves precision; the Markdown artifact
 remains the authoritative index and must still contain the change tree and evidence.
 
-## Maintain project structure knowledge
+## Maintain post-completion project structure knowledge
 
-Treat `HARNOVE_HOME/structure/` as project-owned, cumulative knowledge. Use Markdown by
-default and HTML only when necessary. Every structure file must cover functional modules,
-code framework, and structure definitions/relationships with file or symbol evidence. Use
-`STRUCTURE_STATUS: CONSISTENT` only after checking relevant code. If any mismatch exists,
-update structure first and use `STRUCTURE_STATUS: UPDATED`. Never package or publish structure
-records as Harnove core files.
+Treat `HARNOVE_HOME/structure/` as project-owned post-completion abstraction, not as an input
+to requirements, technical design, or code planning. Use Markdown by default and HTML only
+when necessary. During summary, inspect the completed live repository and update structure so
+it covers functional modules, code framework, and structure definitions/relationships with
+file or symbol evidence. Declare `STRUCTURE_STATUS: UPDATED`. Never package or publish
+structure records as Harnove core files.
 
 ## Reuse and grow experience
 
