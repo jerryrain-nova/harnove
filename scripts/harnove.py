@@ -17,6 +17,7 @@ from pathlib import Path
 STAGES = ["prd_intake", "technical_design", "code_plan", "test_design", "implementation", "test_execution", "summary"]
 GATED = {"technical_design", "code_plan", "test_design"}
 REVIEW_GATED = GATED | {"prd_intake"}
+VERSIONED_DOCUMENT_STAGES = REVIEW_GATED
 DIRS = {
     "prd_intake": "00-input",
     "technical_design": "01-technical-design",
@@ -39,7 +40,7 @@ REQUIRED_SECTIONS = {
     "prd_intake": ["文档总览", "版本核心差异", "原始需求描述", "目标与背景", "用户与场景", "功能需求", "非功能需求", "范围内", "范围外", "验收标准", "约束与依赖", "信息补充记录", "待确认问题", "用户补充记录"],
     "technical_design": ["方案总览", "版本核心差异", "需求依据", "实时代码架构依据", "目标与非目标", "现状分析", "技术方案", "功能变更树", "架构与流程图", "风险", "回滚", "追溯矩阵"],
     "code_plan": ["变更总览", "版本核心差异", "需求依据", "实时代码架构依据", "改动范围", "改动细则", "代码变更树", "改动关系图", "改动原因", "禁止改动", "追溯矩阵"],
-    "test_design": ["需求依据", "覆盖策略", "测试用例", "测试目的", "覆盖矩阵"],
+    "test_design": ["测试总览", "版本核心差异", "需求依据", "覆盖策略", "测试用例", "测试目的", "覆盖矩阵"],
     "implementation": ["需求依据", "批准基线", "实际改动", "Git 证据", "方案偏差"],
     "test_execution": ["需求依据", "实际变更审查", "可执行测试", "执行结果", "结论"],
     "summary": ["总结总览", "需求背景", "迭代内容", "测试结论", "追溯矩阵", "项目结构抽象", "用户反馈经验", "环节评分", "亮点", "缺点", "根因", "经验总结", "下次复用规则", "改进项"],
@@ -108,7 +109,7 @@ def load(archive: Path) -> dict:
     if not path.is_file():
         raise SystemExit(f"找不到状态文件: {path}")
     state = json.loads(path.read_text(encoding="utf-8"))
-    if state.get("schema_version", 1) < 7:
+    if state.get("schema_version", 1) < 8:
         _, _, discovered_improve, discovered_structure, discovered_custom, discovered_home, discovered_branch_pattern = project_defaults()
         inferred_home = archive.parent.parent.resolve()
         migration_home = Path(discovered_home) if inside(archive, Path(discovered_home)) else inferred_home
@@ -130,10 +131,10 @@ def load(archive: Path) -> dict:
             state["version"] = state.get("stage_versions", {}).get(state["stage"], 0) + 1
             state.setdefault("stage_versions", {})[state["stage"]] = state["version"]
             state["status"] = "awaiting_dispatch"
-        state.setdefault("history", []).append({"at": now(), "action": "schema_migration", "from": old_schema, "to": 7})
+        state.setdefault("history", []).append({"at": now(), "action": "schema_migration", "from": old_schema, "to": 8})
         if state.get("status") == "drafting":
             state["status"] = "awaiting_dispatch"
-        state["schema_version"] = 7
+        state["schema_version"] = 8
         if not state.get("improvement_index") and (archive / "00-input").is_dir():
             state["improvement_index"] = create_improvement_context(archive, state)
         if not state.get("custom_index") and (archive / "00-input").is_dir():
@@ -314,14 +315,39 @@ def validate_artifact(path: Path, stage: str, state: dict | None = None, last_ru
         errors.append("仍存在未填写的模板占位符")
     if len(text.strip()) < 500:
         errors.append("产物内容过短，无法形成可审核证据")
-    if stage in {"prd_intake", "technical_design", "code_plan"}:
-        overview = {"prd_intake": "文档总览", "technical_design": "方案总览", "code_plan": "变更总览"}[stage]
+    if stage in VERSIONED_DOCUMENT_STAGES:
+        overview = {"prd_intake": "文档总览", "technical_design": "方案总览", "code_plan": "变更总览", "test_design": "测试总览"}[stage]
         if len(section_text(text, overview)) < 60:
             errors.append(f"{overview}过短，必须在文档开头集中说明目标、范围、关键决策和风险/验收重点")
         differences = section_text(text, "版本核心差异")
         version = (state or {}).get("version", 1)
         if version > 1 and (len(differences) < 40 or "上一版" not in differences or "首版" in differences):
             errors.append("迭代版本必须在“版本核心差异”中明确概括相对上一版的核心变化")
+        if version > 1:
+            overview_position = text.find(f"## {overview}")
+            difference_position = text.find("## 版本核心差异")
+            evolution_position = text.find("## 版本演进摘要")
+            detail_position = min(
+                position for heading in REQUIRED_SECTIONS[stage][2:]
+                if (position := text.find(f"## {heading}")) >= 0
+            )
+            if evolution_position < 0:
+                errors.append("新版本必须新增“版本演进摘要”，历史版本文件不得回写")
+            elif not overview_position < difference_position < evolution_position < detail_position:
+                errors.append("新版本的版本演进摘要必须位于总览、版本核心差异之后和细则之前")
+            evolution = section_text(text, "版本演进摘要")
+            entry_matches = list(re.finditer(r"^\s*[-*]\s*v(\d{3})[：:]\s*(.+?)\s*$", evolution, re.MULTILINE))
+            entry_versions = [int(match.group(1)) for match in entry_matches]
+            expected_versions = list(range(version, 0, -1))
+            if entry_versions != expected_versions:
+                errors.append(
+                    "版本演进摘要必须按当前版本到初代版本完整倒序展示: "
+                    + ", ".join(f"v{value:03d}" for value in expected_versions)
+                )
+            for match in entry_matches:
+                entry_version, summary = int(match.group(1)), match.group(2).strip()
+                if entry_version <= version and not 12 <= len(summary) <= 180:
+                    errors.append(f"v{entry_version:03d} 的演进摘要必须归纳为 12-180 字，不能粘贴全量文档")
         if stage in {"technical_design", "code_plan"} and len(section_text(text, "实时代码架构依据")) < 60:
             errors.append("实时代码架构依据过短，必须记录本轮直接检查的文件、符号和架构结论")
     if stage in {"technical_design", "code_plan"}:
@@ -471,6 +497,8 @@ def user_feedback_items(state: dict) -> list[str]:
             items.append(event["response"].strip())
         elif event.get("action") == "human_review" and event.get("feedback"):
             items.append(event["feedback"].strip())
+        elif event.get("action") == "document_change_decision" and event.get("feedback"):
+            items.append(event["feedback"].strip())
         elif event.get("action") == "custom_update" and event.get("content"):
             items.append(event["content"].strip())
     return items
@@ -542,7 +570,7 @@ def cmd_init(a: argparse.Namespace) -> None:
         (archive / folder).mkdir(parents=True, exist_ok=True)
     baseline = git(repo, "rev-parse", "HEAD")
     state = {
-        "schema_version": 7, "iteration_id": ident, "iteration_name": iteration_name, "requirement": req,
+        "schema_version": 8, "iteration_id": ident, "iteration_name": iteration_name, "requirement": req,
         "default_branch_pattern": getattr(a, "branch_pattern", "tmp/{iteration_name}-{implementation_version}"),
         "archive": str(archive), "repo": str(repo), "harnove_home": str(home),
         "improve_root": str(improve_root), "structure_root": str(structure_root), "custom_root": str(custom_root), "git_baseline": baseline,
@@ -653,6 +681,7 @@ def cmd_dispatch(a: argparse.Namespace) -> None:
         "custom_context": str(archive / "00-input" / state["custom_index"]),
         "custom_root": state["custom_root"],
         "approved_inputs": state.get("approved", {}),
+        "revision_context": state.get("approved_change_preview") if stage in VERSIONED_DOCUMENT_STAGES else None,
         "write_scope": (
             "approved_repo_scope_and_artifact" if stage in {"implementation", "test_execution"}
             else "structure_and_artifact" if stage == "summary"
@@ -664,6 +693,7 @@ def cmd_dispatch(a: argparse.Namespace) -> None:
             "开始当前环节前读取项目自定义上下文，遵守 user.md 约束并复用 self.md 经验",
             "需求、技术和代码方案不得把 structure 作为架构输入；必须直接检查当前仓库代码",
             "技术方案和代码方案必须引用本次实时读取的文件或符号证据",
+            "文档 v002 及以后新增版本演进摘要，按当前版本到 v001 倒序精简记录轨迹；不得回写任何历史版本文件",
             "summary 环节依据完成后的当前代码更新 structure 抽象，覆盖功能模块、代码框架、结构定义和关系",
             "summary 环节必须根据澄清、审核反馈和 custom 更新提炼用户反馈经验",
             "不得执行其他环节的工作，不得复用本次子 Agent 身份",
@@ -739,6 +769,8 @@ def cmd_status(a: argparse.Namespace) -> None:
         "awaiting_user_clarification": "ask_user_then_clarify",
         "awaiting_prd_review": "human_review",
         "awaiting_human_review": "human_review",
+        "awaiting_change_preview": "orchestrator_explain_document_changes",
+        "awaiting_change_confirmation": "human_confirm_or_revise_change_preview",
         "complete": "none",
     }.get(state["status"], "inspect_state")
     print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -917,6 +949,8 @@ def cmd_review(a: argparse.Namespace) -> None:
         validate_original_input(archive, state)
     if a.decision == "reject" and not a.feedback.strip():
         raise SystemExit("驳回必须提供可执行的 --feedback")
+    if a.decision == "approve" and a.feedback.strip():
+        raise SystemExit("带反馈的审核不能直接批准；请使用 reject 进入变更影响确认流程")
     stage, version, path = state["stage"], state["version"], artifact_path(archive, state)
     record = {"at": now(), "reviewer": a.reviewer, "decision": a.decision, "stage": stage, "version": version, "artifact": str(path.relative_to(archive)), "sha256": digest(path), "feedback": a.feedback.strip()}
     if stage in {"technical_design", "code_plan"} and "PRESENTATION_FORMAT: HTML" in path.read_text(encoding="utf-8"):
@@ -933,19 +967,100 @@ def cmd_review(a: argparse.Namespace) -> None:
             state["prd_snapshot"] = path.name
             state["prd_sha256"] = digest(path)
             create_requirement_baseline(archive, state)
+        state.pop("approved_change_preview", None)
         advance(state)
     else:
-        state["version"] += 1
+        state["pending_document_change"] = {
+            "stage": stage, "version": version, "artifact": str(path.relative_to(archive)),
+            "artifact_sha256": digest(path), "feedback": [{"at": record["at"], "reviewer": a.reviewer, "content": a.feedback.strip()}],
+            "preview_round": 0,
+        }
+        state["status"] = "awaiting_change_preview"
+    save(archive, state)
+    cmd_status(argparse.Namespace(archive=str(archive)))
+
+
+def cmd_change_preview(a: argparse.Namespace) -> None:
+    archive, state = Path(a.archive).resolve(), load(Path(a.archive).resolve())
+    pending = state.get("pending_document_change") or {}
+    if state["status"] != "awaiting_change_preview" or pending.get("stage") != state["stage"] or pending.get("version") != state["version"]:
+        raise SystemExit("当前没有等待分析的文档反馈")
+    summary = a.summary
+    if a.summary_file:
+        source = Path(a.summary_file).resolve()
+        if not source.is_file():
+            raise SystemExit(f"变更影响说明文件不存在: {source}")
+        summary = source.read_text(encoding="utf-8")
+    sections = [item.strip() for item in a.sections.split(",") if item.strip()]
+    if not sections:
+        raise SystemExit("必须通过 --sections 列出将发生变化的文档部分")
+    unknown_sections = [item for item in sections if item not in REQUIRED_SECTIONS[state["stage"]]]
+    if unknown_sections:
+        raise SystemExit("变更影响包含不存在的文档章节: " + ", ".join(unknown_sections))
+    if not summary or len(summary.strip()) < 40:
+        raise SystemExit("变更影响说明至少需要 40 字，包含变化内容、原因和边界")
+    pending["preview_round"] = pending.get("preview_round", 0) + 1
+    preview = {
+        "at": now(), "action": "document_change_preview", "orchestrator": a.orchestrator,
+        "stage": state["stage"], "version": state["version"], "round": pending["preview_round"],
+        "sections": list(dict.fromkeys(sections)), "summary": summary.strip(),
+        "feedback": pending["feedback"],
+    }
+    preview_path = archive / "reviews" / f"{state['stage']}_v{state['version']:03d}_change-preview-r{preview['round']:03d}_{dt.datetime.now():%Y%m%d%H%M%S%f}.json"
+    preview_path.write_text(json.dumps(preview, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    preview["record"] = str(preview_path.relative_to(archive))
+    pending["latest_preview"] = preview
+    state["pending_document_change"] = pending
+    state["history"].append(preview)
+    state["status"] = "awaiting_change_confirmation"
+    save(archive, state)
+    print(json.dumps({"status": state["status"], "sections": preview["sections"], "summary": preview["summary"], "next_action": "ask_user_approve_or_revise"}, ensure_ascii=False, indent=2))
+
+
+def cmd_change_decision(a: argparse.Namespace) -> None:
+    archive, state = Path(a.archive).resolve(), load(Path(a.archive).resolve())
+    pending = state.get("pending_document_change") or {}
+    preview = pending.get("latest_preview") or {}
+    if state["status"] != "awaiting_change_confirmation" or not preview:
+        raise SystemExit("当前没有等待确认的文档变更影响预览")
+    if a.decision == "revise" and not a.feedback.strip():
+        raise SystemExit("不批准当前预览时必须提供新的 --feedback")
+    if a.decision == "approve" and a.feedback.strip():
+        raise SystemExit("批准变更影响预览时不能同时附加新反馈；请先 revise 并重新分析")
+    decision = {
+        "at": now(), "action": "document_change_decision", "reviewer": a.reviewer,
+        "decision": a.decision, "feedback": a.feedback.strip(), "stage": state["stage"],
+        "version": state["version"], "preview_record": preview["record"],
+    }
+    decision_path = archive / "reviews" / f"{state['stage']}_v{state['version']:03d}_change-{a.decision}_{dt.datetime.now():%Y%m%d%H%M%S%f}.json"
+    decision_path.write_text(json.dumps(decision, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    decision["record"] = str(decision_path.relative_to(archive))
+    state["history"].append(decision)
+    if a.decision == "revise":
+        pending["feedback"].append({"at": decision["at"], "reviewer": a.reviewer, "content": a.feedback.strip()})
+        pending.pop("latest_preview", None)
+        state["pending_document_change"] = pending
+        state["status"] = "awaiting_change_preview"
+    else:
+        stage, old_version = state["stage"], state["version"]
+        source_path = artifact_path(archive, state)
+        state["version"] = old_version + 1
         state["stage_versions"][stage] = state["version"]
+        target = artifact_path(archive, state)
+        revised = source_path.read_text(encoding="utf-8")
+        revised = re.sub(r"(- 文档版本：)v\d{3}", rf"\1v{state['version']:03d}", revised, count=1)
+        if stage == "prd_intake":
+            revised = revised.replace("PRD_STATUS: READY", "PRD_STATUS: NEEDS_CLARIFICATION")
+        target.write_text(revised, encoding="utf-8")
+        source_html = source_path.with_suffix(".html")
+        if source_html.is_file():
+            target.with_suffix(".html").write_bytes(source_html.read_bytes())
+        state["approved_change_preview"] = {
+            "from_version": old_version, "to_version": state["version"], "preview": preview,
+            "decision_record": decision["record"], "all_feedback": pending["feedback"],
+        }
+        state.pop("pending_document_change", None)
         state["status"] = "awaiting_dispatch"
-    target = artifact_path(archive, state)
-    if state["status"] == "awaiting_dispatch" and not target.exists():
-        if stage == "prd_intake" and a.decision == "reject":
-            revised = path.read_text(encoding="utf-8").replace("PRD_STATUS: READY", "PRD_STATUS: NEEDS_CLARIFICATION")
-            revised += f"\n\n## PRD 审核反馈（待处理）\n\n- 审核人：{a.reviewer}\n- 反馈：{a.feedback.strip()}\n"
-            target.write_text(revised, encoding="utf-8")
-        else:
-            target.write_text(template(state, state["stage"], state["version"]), encoding="utf-8")
     save(archive, state)
     cmd_status(argparse.Namespace(archive=str(archive)))
 
@@ -971,6 +1086,9 @@ def parser() -> argparse.ArgumentParser:
     x = sub.add_parser("customize"); x.add_argument("--archive", required=True); x.add_argument("--target", choices=["user", "self"], default="user"); x.add_argument("--mode", choices=["append", "replace"], default="append"); x.add_argument("--actor", required=True)
     custom_content = x.add_mutually_exclusive_group(required=True); custom_content.add_argument("--content"); custom_content.add_argument("--content-file"); x.set_defaults(func=cmd_customize)
     x = sub.add_parser("review"); x.add_argument("--archive", required=True); x.add_argument("--decision", required=True, choices=["approve", "reject"]); x.add_argument("--reviewer", required=True); x.add_argument("--feedback", default=""); x.set_defaults(func=cmd_review)
+    x = sub.add_parser("change-preview"); x.add_argument("--archive", required=True); x.add_argument("--orchestrator", required=True); x.add_argument("--sections", required=True, help="逗号分隔的受影响章节")
+    preview_content = x.add_mutually_exclusive_group(required=True); preview_content.add_argument("--summary"); preview_content.add_argument("--summary-file"); x.set_defaults(func=cmd_change_preview)
+    x = sub.add_parser("change-decision"); x.add_argument("--archive", required=True); x.add_argument("--decision", required=True, choices=["approve", "revise"]); x.add_argument("--reviewer", required=True); x.add_argument("--feedback", default=""); x.set_defaults(func=cmd_change_decision)
     return p
 
 

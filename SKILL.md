@@ -31,7 +31,7 @@ For every `(stage, version)`:
    inspect the custom snapshot for a user branch rule and pass the resolved exact name through
    `--branch`; otherwise let Harnove use its default branch.
 4. Spawn a fresh platform-native subagent and give it only the generated work-order path.
-   Never reuse a subagent across stages, versions, rejections, clarification revisions, or
+   Never reuse a subagent across stages, versions, approved feedback revisions, clarification revisions, or
    test-fix cycles. If the platform cannot create subagents, stop and report the limitation.
 5. Monitor the child. The child may work only within the work order, must read the frozen PRD,
    custom context and experience context, and must not call Harnove state
@@ -57,8 +57,8 @@ acceptance rules.
 If material ambiguity remains, submit `needs-clarification`, ask the user the minimum grouped
 questions, and archive the reply with `clarify`. Dispatch a fresh PRD subagent for the new
 version. When boundaries are sufficient, submit `ready`, stop at `awaiting_prd_review`, and
-obtain an explicit human `review`. Rejection requires actionable feedback and a fresh child;
-approval alone freezes the candidate PRD and advances the workflow.
+obtain an explicit human `review`. Approval freezes the candidate PRD and advances the workflow.
+Feedback enters the document-change preview loop below; it does not create a version or child yet.
 
 ## Execute isolated stages
 
@@ -83,13 +83,36 @@ approval alone freezes the candidate PRD and advances the workflow.
 
 Candidate PRD, technical design, code plan, and test design require real human approval.
 
+## Preview feedback impact before revising documents
+
+Apply this loop to candidate PRDs, technical designs, code plans, and test designs:
+
+1. Treat any requested document change at a review gate as rejection of the current version unless
+   the user explicitly approves it unchanged. Run `review --decision reject ...`. Stop;
+   do not increment the version, create a work order, or spawn a child.
+2. Read the reviewed artifact and all accumulated feedback. Explain directly to the user which
+   sections would change, the core change in each, the reason, preserved boundaries, and risks.
+   Archive the explanation with `change-preview --sections <list> --summary <text>`.
+3. Ask whether to implement that preview or revise it. Do not treat feedback as implementation approval.
+4. If the user requests changes, run `change-decision --decision revise --feedback <text>`,
+   recompute the affected sections from all feedback, submit a new `change-preview`, and ask again.
+5. Only after explicit approval run `change-decision --decision approve`. Harnove then creates
+   the next document version and enters `awaiting_dispatch`; spawn a fresh subagent at that point.
+
+The main Agent may author only the short change-impact preview in this loop. It must not edit
+the stage artifact itself. Never dispatch while status is `awaiting_change_preview` or
+`awaiting_change_confirmation`.
+
 ## Put decisions before details
 
-Candidate PRDs, technical designs, and code plans must begin with their required overview and
-`版本核心差异` sections. Keep the overview decision-oriented: goal, scope, key decision, and
+Candidate PRDs, technical designs, code plans, and test designs begin with their required
+overview and `版本核心差异`. Version v002 and later must add `版本演进摘要` immediately afterward;
+never retrofit this section into an earlier artifact. Keep the overview decision-oriented: goal, scope, key decision, and
 acceptance or risk focus. Put supporting analysis, tables, and detailed rules afterward. For
 version 2 or later, compare with the immediately previous version and summarize core additions,
-removals, changed decisions, and reasons; do not merely repeat the document.
+removals, changed decisions, and reasons. In `版本演进摘要`, retain one concise entry for every
+version in descending order from the current version through v001. Summarize decisions instead
+of copying full sections, feedback, or prior documents. Historical artifact files are immutable.
 
 ## Use diagrams when they improve comprehension
 

@@ -37,12 +37,31 @@ through `--iteration-name`; initialization must not infer a name silently.
 
 ## Document information order and version differences
 
-Candidate PRDs, technical designs, and code plans put overview decisions before supporting
-details. Their first two content sections are respectively
-`文档总览|方案总览|变更总览` and `版本核心差异`. The overview highlights the goal, scope,
+Candidate PRDs, technical designs, code plans, and test designs put overview decisions before supporting
+details. All versions start with `文档总览|方案总览|变更总览|测试总览` and `版本核心差异`.
+Version v002 and later add `版本演进摘要` as the third content section. The overview highlights the goal, scope,
 key decisions, and acceptance or risk focus. For version 2 or later, `版本核心差异` explicitly
 compares with the immediately previous version and records core additions, removals, changed
-decisions, and reasons.
+decisions, and reasons. `版本演进摘要` contains one 12-180 character summary for every version,
+ordered from the current version down through v001. It distills decisions and must not paste full
+historical content. Never modify an earlier artifact to add or refresh this section.
+
+## Feedback impact confirmation contract
+
+This contract applies to every human-reviewed document. A rejection with feedback records the
+feedback but keeps the same version and enters `awaiting_change_preview`. The orchestrator reads
+the artifact and accumulated feedback, lists affected sections, summarizes the expected changes,
+and archives that analysis with `change-preview`; no child is dispatched.
+
+At a review gate, any request to change document content means the current version is not
+approved and is recorded as rejection feedback, even if the user does not use the word
+“reject”. Approval means approval without pending changes.
+
+The user then explicitly approves implementation or supplies more feedback through
+`change-decision`. More feedback returns to `awaiting_change_preview` without changing the
+document version. Only `change-decision --decision approve` creates the next version and permits
+a fresh subagent. Each preview and decision is immutable under `reviews/` and becomes revision
+context in the next work order.
 
 ## Required content
 
@@ -57,12 +76,12 @@ confirmation state.
 
 Use `PRD_STATUS: NEEDS_CLARIFICATION` while material ambiguity remains and
 `PRD_STATUS: READY` only when `待确认问题` says `无（边界已确认）`. Every clarification and
-rejection is immutable and produces a new version. A ready PRD requires explicit human
+rejection is immutable but produces a new version only after its change preview is approved. A ready PRD requires explicit human
 approval; only the approved version/hash becomes downstream scope.
 
 ### Technical design
 
-Start with `方案总览` and `版本核心差异`. Include goals/non-goals, current architecture
+Start with `方案总览` and `版本核心差异`; v002 and later then add `版本演进摘要`. Include goals/non-goals, current architecture
 evidence, proposed design, data/API/control flows, compatibility, security/performance/
 observability impact, risks, rollout/rollback, open decisions, and a requirement-to-design
 matrix.
@@ -77,7 +96,7 @@ specific reason of at least 20 characters.
 
 ### Code-change plan
 
-Start with `变更总览` and `版本核心差异`. Include the approved design version, change
+Start with `变更总览` and `版本核心差异`; v002 and later then add `版本演进摘要`. Include the approved design version, change
 boundaries, file/module/symbol scope, per-change rules and reasons, requirement IDs,
 compatibility/migration notes, sequencing, risks, prohibited changes, and design-to-code
 traceability. Product code remains untouched.
@@ -92,7 +111,7 @@ Technical design and code-plan Markdown declare `PRESENTATION_FORMAT: MD` by def
 
 ### Test design
 
-Include coverage strategy and a case table with case ID, requirement IDs, planned-change IDs,
+Start with `测试总览` and `版本核心差异`; v002 and later then add `版本演进摘要`. Include coverage strategy and a case table with case ID, requirement IDs, planned-change IDs,
 purpose, level/type, priority, preconditions, data, steps, expected result, automation target,
 and edge/failure behavior. Include requirement and change coverage matrices.
 
@@ -154,11 +173,14 @@ before dispatching the next child. Exclude custom files from clean packages and 
 
 The main Agent only orchestrates. An artifact is submittable only after a fresh subagent has a
 matching work order, active lease, and successful completion record for the exact stage/version.
-Children cannot approve gates or invoke state commands. Rejection, clarification, test failure,
-crash, or abandonment requires a new child identity and run.
+Children cannot approve gates or invoke state commands. An approved feedback preview,
+clarification revision, test failure, crash, or abandonment requires a new child identity and
+run. Rejection feedback alone does not permit a new child.
 
 ## Human review contract
 
 Approval freezes the named artifact version as downstream baseline. Rejection requires
-actionable feedback and creates a new version. Review records contain reviewer, timestamp,
-decision, artifact hash, and feedback; they are never edited or deleted.
+actionable feedback and enters the feedback-impact confirmation loop without changing the
+version. The next version is created only after the user approves that impact preview. Review
+records contain reviewer, timestamp, decision, artifact hash, and feedback; they are never edited
+or deleted.
