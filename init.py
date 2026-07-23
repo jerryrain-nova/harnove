@@ -197,6 +197,7 @@ def main() -> None:
     print(f"经验沉淀: {improve_root}")
     print(f"项目结构知识: {structure_root}")
     print(f"项目自定义上下文: {custom_root}")
+    print(f"快速开始: {install_root / 'README.md'}")
     print(f"使用文档: {install_root / 'USAGE.md'}")
     print("下一步: 先由 Agent 建议迭代名称并由用户确认。")
     print(f"确认后运行: {install_root / 'run.ps1'} init --iteration-id <ID> --iteration-name <用户确认名称> --requirement <需求标识> (--prd <路径> | --description <描述>)")
