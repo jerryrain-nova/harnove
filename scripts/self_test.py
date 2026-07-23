@@ -94,6 +94,12 @@ def review(archive: Path, decision: str, feedback: str = "") -> None:
     ))
 
 
+def decide_repair_branch(archive: Path, strategy: str, branch: str | None = None) -> None:
+    harnove.cmd_repair_branch_decision(argparse.Namespace(
+        archive=str(archive), strategy=strategy, responder="smoke-human", branch=branch,
+    ))
+
+
 def approve_document_change(archive: Path, feedback: str, revise_feedback: str = "") -> None:
     before = harnove.load(archive)
     source_path = harnove.artifact_path(archive, before)
@@ -294,19 +300,79 @@ def test_existing_prd(root: Path) -> Path:
     submit(archive); review(archive, "approve")
     assert not harnove.structure_files(Path(harnove.load(archive)["structure_root"]))
     submit(archive)
-    first_branch = harnove.load(archive)["implementation_branches"][-1]["name"]
+    implementation_state = harnove.load(archive)
+    first_branch = implementation_state["implementation_branches"][-1]["name"]
     assert first_branch == "tmp/state-machine-1"
+    (root / "implementation-marker.txt").write_text("initial implementation\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "implementation-marker.txt"], check=True)
+    subprocess.run([
+        "git", "-C", str(root), "-c", "user.name=Harnove Test", "-c", "user.email=harnove@example.invalid",
+        "commit", "-qm", "initial implementation marker",
+    ], check=True)
+    original_branch = implementation_state["implementation_branch"]["previous_branch"]
+    subprocess.run(["git", "-C", str(root), "switch", original_branch], check=True, capture_output=True)
     submit(archive, "failed")
-    assert harnove.load(archive)["stage"] == "implementation"
-    submit(archive, branch="feature/state-machine-fix-round-2")
+    assert harnove.git(root, "branch", "--show-current") == first_branch
+    pending_state = harnove.load(archive)
+    assert pending_state["status"] == "awaiting_repair_branch_decision"
+    assert pending_state["pending_repair_branch_decision"]["current_branch"] == first_branch
+    assert pending_state["pending_repair_branch_decision"]["suggested_new_branch"] == "tmp/state-machine-2"
+    try:
+        harnove.cmd_dispatch(argparse.Namespace(
+            archive=str(archive), agent_id="premature-fix-agent", orchestrator="smoke-main", branch=None,
+        ))
+        raise AssertionError("repair dispatched before user selected a branch strategy")
+    except SystemExit as exc:
+        assert "不允许派发" in str(exc)
+    decide_repair_branch(archive, "reuse")
+    try:
+        harnove.cmd_dispatch(argparse.Namespace(
+            archive=str(archive), agent_id="wrong-fix-branch-agent", orchestrator="smoke-main",
+            branch="feature/state-machine-fix-round-2",
+        ))
+        raise AssertionError("test fix was allowed to switch implementation branches")
+    except SystemExit as exc:
+        assert "选择复用原有分支" in str(exc)
+    submit(archive)
     second_branch = harnove.load(archive)["implementation_branches"][-1]["name"]
-    assert second_branch == "feature/state-machine-fix-round-2"
+    assert second_branch == first_branch
+    assert len({item["name"] for item in harnove.load(archive)["implementation_branches"]}) == 1
+    (root / "repair-marker.txt").write_text("repair on original branch\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "repair-marker.txt"], check=True)
+    subprocess.run([
+        "git", "-C", str(root), "-c", "user.name=Harnove Test", "-c", "user.email=harnove@example.invalid",
+        "commit", "-qm", "repair marker",
+    ], check=True)
+    reused_branch_head = harnove.git(root, "rev-parse", "HEAD")
+    submit(archive, "failed")
+    assert harnove.load(archive)["status"] == "awaiting_repair_branch_decision"
+    try:
+        decide_repair_branch(archive, "new", first_branch)
+        raise AssertionError("new repair branch decision accepted the current implementation branch")
+    except SystemExit as exc:
+        assert "必须不同于当前实现分支" in str(exc)
+    new_fix_branch = "tmp/state-machine-3"
+    decide_repair_branch(archive, "new")
+    subprocess.run(["git", "-C", str(root), "switch", original_branch], check=True, capture_output=True)
+    submit(archive)
+    third_branch = harnove.load(archive)["implementation_branches"][-1]["name"]
+    assert third_branch == new_fix_branch
+    assert harnove.git(root, "branch", "--show-current") == new_fix_branch
+    assert subprocess.run(
+        ["git", "-C", str(root), "merge-base", "--is-ancestor", reused_branch_head, new_fix_branch],
+        check=False,
+    ).returncode == 0
     submit(archive, "passed")
     assert harnove.load(archive)["stage"] == "summary"
     submit(archive)
     state = harnove.load(archive)
     assert state["status"] == "complete"
-    assert state["test_cycles"] == 2
+    assert state["test_cycles"] == 3
+    assert state["initial_implementation_branch"]["name"] == first_branch
+    assert state["implementation_branch"]["name"] == new_fix_branch
+    assert state["delivery_branch"]["name"] == new_fix_branch
+    assert [item["strategy"] for item in state["repair_branch_decisions"]] == ["reuse", "new"]
+    assert harnove.git(root, "branch", "--show-current") == new_fix_branch
     assert len(state["used_agent_ids"]) == len(set(state["used_agent_ids"]))
     assert len(list((archive / "agent-runs").glob("*_work-order.json"))) == len(state["used_agent_ids"])
     improvement = Path(state["improvement_record"]["path"])
@@ -350,13 +416,34 @@ def test_natural_language_reuses_experience(root: Path, improvement: Path) -> No
     assert "structure_context" not in work_order
 
 
+def test_schema8_branch_migration(root: Path) -> None:
+    archive = root / "schema8-migration"
+    archive.mkdir()
+    state = {
+        "schema_version": 8, "stage": "summary", "version": 1, "status": "complete",
+        "requirement": "migration", "iteration_name": "migration", "history": [],
+        "used_agent_ids": [], "improvement_index": "existing.md", "custom_index": "existing.md",
+        "implementation_branches": [
+            {"stage_version": 1, "name": "feature/original", "previous_branch": "main", "source": "user_or_custom"},
+            {"stage_version": 2, "name": "feature/old-fix", "previous_branch": "feature/original", "source": "user_or_custom"},
+        ],
+    }
+    (archive / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    migrated = harnove.load(archive)
+    assert migrated["schema_version"] == 10
+    assert migrated["initial_implementation_branch"]["name"] == "feature/original"
+    assert migrated["implementation_branch"]["name"] == "feature/old-fix"
+    assert migrated["repair_branch_decisions"] == []
+
+
 def main() -> None:
     package = json.loads((Path(__file__).resolve().parent.parent / "harnove-package.json").read_text(encoding="utf-8"))
-    assert version_policy.expected(version_policy.parse("5.0.0"), "feature") == version_policy.parse(package["version"])
+    assert version_policy.expected(version_policy.parse("5.1.1"), "feature") == version_policy.parse(package["version"])
     with tempfile.TemporaryDirectory(prefix="harnove-") as tmp, redirect_stdout(StringIO()):
         root = Path(tmp)
         improvement = test_existing_prd(root)
         test_natural_language_reuses_experience(root, improvement)
+        test_schema8_branch_migration(root)
     print("self-test passed")
 
 

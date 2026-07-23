@@ -109,7 +109,7 @@ def load(archive: Path) -> dict:
     if not path.is_file():
         raise SystemExit(f"找不到状态文件: {path}")
     state = json.loads(path.read_text(encoding="utf-8"))
-    if state.get("schema_version", 1) < 8:
+    if state.get("schema_version", 1) < 10:
         _, _, discovered_improve, discovered_structure, discovered_custom, discovered_home, discovered_branch_pattern = project_defaults()
         inferred_home = archive.parent.parent.resolve()
         migration_home = Path(discovered_home) if inside(archive, Path(discovered_home)) else inferred_home
@@ -124,6 +124,23 @@ def load(archive: Path) -> dict:
         state.setdefault("iteration_name", state.get("requirement", "iteration"))
         state.setdefault("default_branch_pattern", discovered_branch_pattern)
         old_schema = state.get("schema_version", 1)
+        prior_branches = state.get("implementation_branches", [])
+        if prior_branches:
+            first_branch, latest_branch = prior_branches[0], prior_branches[-1]
+            state.setdefault("initial_implementation_branch", {
+                "name": first_branch["name"], "previous_branch": first_branch.get("previous_branch"),
+                "prepared_at": first_branch.get("prepared_at"), "source": first_branch.get("source", "migrated"),
+                "initial_stage_version": first_branch.get("stage_version", 1),
+            })
+            if not state.get("implementation_branch"):
+                state["implementation_branch"] = {
+                    "name": latest_branch["name"], "previous_branch": latest_branch.get("previous_branch"),
+                    "prepared_at": latest_branch.get("prepared_at"), "source": latest_branch.get("source", "migrated"),
+                    "initial_stage_version": latest_branch.get("stage_version", 1),
+                }
+        elif state.get("implementation_branch"):
+            state.setdefault("initial_implementation_branch", state["implementation_branch"])
+        state.setdefault("repair_branch_decisions", [])
         if state.get("stage") in {"structure_analysis", "structure_refresh"}:
             if state.get("status") == "subagent_working":
                 raise SystemExit("旧迭代正停留在已移除的 structure 阶段；请用原版本结束该子 Agent 后再升级")
@@ -131,10 +148,10 @@ def load(archive: Path) -> dict:
             state["version"] = state.get("stage_versions", {}).get(state["stage"], 0) + 1
             state.setdefault("stage_versions", {})[state["stage"]] = state["version"]
             state["status"] = "awaiting_dispatch"
-        state.setdefault("history", []).append({"at": now(), "action": "schema_migration", "from": old_schema, "to": 8})
+        state.setdefault("history", []).append({"at": now(), "action": "schema_migration", "from": old_schema, "to": 10})
         if state.get("status") == "drafting":
             state["status"] = "awaiting_dispatch"
-        state["schema_version"] = 8
+        state["schema_version"] = 10
         if not state.get("improvement_index") and (archive / "00-input").is_dir():
             state["improvement_index"] = create_improvement_context(archive, state)
         if not state.get("custom_index") and (archive / "00-input").is_dir():
@@ -570,12 +587,13 @@ def cmd_init(a: argparse.Namespace) -> None:
         (archive / folder).mkdir(parents=True, exist_ok=True)
     baseline = git(repo, "rev-parse", "HEAD")
     state = {
-        "schema_version": 8, "iteration_id": ident, "iteration_name": iteration_name, "requirement": req,
+        "schema_version": 10, "iteration_id": ident, "iteration_name": iteration_name, "requirement": req,
         "default_branch_pattern": getattr(a, "branch_pattern", "tmp/{iteration_name}-{implementation_version}"),
         "archive": str(archive), "repo": str(repo), "harnove_home": str(home),
         "improve_root": str(improve_root), "structure_root": str(structure_root), "custom_root": str(custom_root), "git_baseline": baseline,
         "created_at": now(), "history": [], "approved": {}, "test_cycles": 0,
         "stage_versions": {stage: 0 for stage in STAGES}, "used_agent_ids": [],
+        "implementation_branch": None, "initial_implementation_branch": None, "repair_branch_decisions": [],
     }
     structure_root.mkdir(parents=True, exist_ok=True)
     state["improvement_index"] = create_improvement_context(archive, state)
@@ -649,16 +667,46 @@ def cmd_dispatch(a: argparse.Namespace) -> None:
             (item for item in reversed(state.get("implementation_branches", [])) if item.get("stage_version") == version),
             None,
         )
-        branch = getattr(a, "branch", None) or (prior_preparation or {}).get("name") or default_branch
-        if prior_preparation and getattr(a, "branch", None) and a.branch != prior_preparation["name"]:
-            raise SystemExit(f"实施版本 v{version:03d} 已准备分支 {prior_preparation['name']}，重派不得改用其他分支")
+        active_branch = state.get("implementation_branch")
+        supplied_branch = getattr(a, "branch", None)
+        repair_mode = state.get("repair_branch_mode") if state.get("repair_branch_version") == version else None
+        requested_branch = state.get("repair_branch_requested") if repair_mode == "new" else None
+        if prior_preparation:
+            branch = prior_preparation["name"]
+            if supplied_branch and supplied_branch != branch:
+                raise SystemExit(f"实施版本 v{version:03d} 已准备分支 {branch}，重派不得改用 {supplied_branch}")
+            create_branch = False
+        elif active_branch and repair_mode == "new":
+            if requested_branch and supplied_branch and supplied_branch != requested_branch:
+                raise SystemExit(f"用户已指定新修复分支 {requested_branch}，不得改用 {supplied_branch}")
+            branch = requested_branch or supplied_branch or default_branch
+            create_branch = True
+        elif active_branch:
+            branch = active_branch["name"]
+            if supplied_branch and supplied_branch != branch:
+                raise SystemExit(f"用户已选择复用原有分支 {branch}，不得改用 {supplied_branch}")
+            create_branch = False
+        else:
+            branch = supplied_branch or default_branch
+            create_branch = True
         check = subprocess.run(["git", "check-ref-format", "--branch", branch], text=True, capture_output=True)
         if check.returncode != 0:
             raise SystemExit(f"无效的实施分支名称: {branch}")
         previous = git(repo, "branch", "--show-current")
         if previous is None:
             raise SystemExit("代码实施要求可用的 Git 仓库，无法识别当前分支")
-        switch_args = ["switch", branch] if prior_preparation else ["switch", "-c", branch]
+        if create_branch and active_branch and previous != active_branch["name"]:
+            restore = subprocess.run(
+                ["git", "-C", str(repo), "switch", active_branch["name"]], text=True,
+                encoding="utf-8", errors="replace", capture_output=True, timeout=30,
+            )
+            if restore.returncode != 0:
+                raise SystemExit(
+                    f"新修复分支必须从当前实现分支 {active_branch['name']} 创建: "
+                    f"{restore.stderr.strip() or restore.stdout.strip()}"
+                )
+            previous = active_branch["name"]
+        switch_args = ["switch", "-c", branch] if create_branch else ["switch", branch]
         switch = subprocess.run(
             ["git", "-C", str(repo), *switch_args], text=True, encoding="utf-8",
             errors="replace", capture_output=True, timeout=30,
@@ -667,9 +715,42 @@ def cmd_dispatch(a: argparse.Namespace) -> None:
             raise SystemExit(f"创建并切换实施分支失败: {switch.stderr.strip() or switch.stdout.strip()}")
         if prior_preparation:
             branch_record = {**prior_preparation, "reused_for_redispatch": True}
+        elif active_branch and not create_branch:
+            branch_record = {
+                **active_branch, "stage_version": version, "repair_strategy": "reuse",
+                "reused_for_test_fix": True, "reused_for_redispatch": False,
+            }
         else:
             created_new_branch = True
-            branch_record = {"name": branch, "previous_branch": previous, "prepared_at": now(), "source": "user_or_custom" if getattr(a, "branch", None) else "default"}
+            branch_record = {
+                "name": branch, "previous_branch": previous, "prepared_at": now(),
+                "source": (
+                    "repair_user" if active_branch and (requested_branch or supplied_branch)
+                    else "repair_default" if active_branch else "user_or_custom" if supplied_branch else "default"
+                ),
+                "initial_stage_version": version, "stage_version": version,
+                "repair_strategy": "new" if active_branch else "initial",
+            }
+    elif stage == "test_execution":
+        repo = Path(state["repo"]).resolve()
+        canonical_branch = state.get("implementation_branch")
+        if not canonical_branch:
+            raise SystemExit("测试执行缺少本次迭代绑定的代码实现分支")
+        supplied_branch = getattr(a, "branch", None)
+        if supplied_branch and supplied_branch != canonical_branch["name"]:
+            raise SystemExit(f"测试执行已绑定代码实现分支 {canonical_branch['name']}，不得改用 {supplied_branch}")
+        current_branch = git(repo, "branch", "--show-current")
+        if current_branch != canonical_branch["name"]:
+            switch = subprocess.run(
+                ["git", "-C", str(repo), "switch", canonical_branch["name"]], text=True,
+                encoding="utf-8", errors="replace", capture_output=True, timeout=30,
+            )
+            if switch.returncode != 0:
+                raise SystemExit(
+                    f"测试执行必须回到代码实现分支 {canonical_branch['name']}: "
+                    f"{switch.stderr.strip() or switch.stdout.strip()}"
+                )
+        branch_record = {**canonical_branch, "test_execution_version": version}
     work_order = {
         "run_id": run_id, "agent_id": a.agent_id, "orchestrator": a.orchestrator,
         "stage": stage, "version": version, "created_at": now(),
@@ -682,6 +763,11 @@ def cmd_dispatch(a: argparse.Namespace) -> None:
         "custom_root": state["custom_root"],
         "approved_inputs": state.get("approved", {}),
         "revision_context": state.get("approved_change_preview") if stage in VERSIONED_DOCUMENT_STAGES else None,
+        "delivery_branch": branch_record or state.get("delivery_branch") or state.get("implementation_branch"),
+        "repair_branch_decision": next(
+            (item for item in reversed(state.get("repair_branch_decisions", [])) if item.get("implementation_version") == version),
+            None,
+        ),
         "write_scope": (
             "approved_repo_scope_and_artifact" if stage in {"implementation", "test_execution"}
             else "structure_and_artifact" if stage == "summary"
@@ -694,6 +780,7 @@ def cmd_dispatch(a: argparse.Namespace) -> None:
             "需求、技术和代码方案不得把 structure 作为架构输入；必须直接检查当前仓库代码",
             "技术方案和代码方案必须引用本次实时读取的文件或符号证据",
             "文档 v002 及以后新增版本演进摘要，按当前版本到 v001 倒序精简记录轨迹；不得回写任何历史版本文件",
+            "测试修复必须遵守用户归档的分支决策：reuse 复用当前实现分支，new 从当前实现分支创建并切换新分支",
             "summary 环节依据完成后的当前代码更新 structure 抽象，覆盖功能模块、代码框架、结构定义和关系",
             "summary 环节必须根据澄清、审核反馈和 custom 更新提炼用户反馈经验",
             "不得执行其他环节的工作，不得复用本次子 Agent 身份",
@@ -715,7 +802,15 @@ def cmd_dispatch(a: argparse.Namespace) -> None:
     if branch_record:
         state["active_agent"]["implementation_branch"] = branch_record
     if created_new_branch:
-        state.setdefault("implementation_branches", []).append({"stage_version": version, **branch_record})
+        state["implementation_branch"] = {
+            key: branch_record[key] for key in ["name", "previous_branch", "prepared_at", "source", "initial_stage_version"]
+        }
+        if not state.get("initial_implementation_branch"):
+            state["initial_implementation_branch"] = state["implementation_branch"]
+    if branch_record and not any(
+        item.get("stage_version") == version for item in state.setdefault("implementation_branches", [])
+    ) and stage == "implementation":
+        state["implementation_branches"].append({"stage_version": version, **branch_record})
     state.setdefault("used_agent_ids", []).append(a.agent_id)
     state["status"] = "subagent_working"
     state["history"].append({"at": now(), "action": "subagent_dispatch", "stage": stage, "version": version, **state["active_agent"]})
@@ -760,7 +855,7 @@ def cmd_abandon(a: argparse.Namespace) -> None:
 
 def cmd_status(a: argparse.Namespace) -> None:
     archive, state = Path(a.archive).resolve(), load(Path(a.archive).resolve())
-    keys = ["iteration_id", "iteration_name", "requirement", "prd_source_type", "stage", "version", "status", "test_cycles", "active_agent"]
+    keys = ["iteration_id", "iteration_name", "requirement", "prd_source_type", "stage", "version", "status", "test_cycles", "implementation_branch", "delivery_branch", "pending_repair_branch_decision", "active_agent"]
     payload = {k: state.get(k) for k in keys}
     payload["next_action"] = {
         "awaiting_dispatch": "spawn_fresh_subagent_then_dispatch",
@@ -771,11 +866,54 @@ def cmd_status(a: argparse.Namespace) -> None:
         "awaiting_human_review": "human_review",
         "awaiting_change_preview": "orchestrator_explain_document_changes",
         "awaiting_change_confirmation": "human_confirm_or_revise_change_preview",
+        "awaiting_repair_branch_decision": "ask_user_reuse_or_create_repair_branch",
         "complete": "none",
     }.get(state["status"], "inspect_state")
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     if state["status"] != "complete":
         print(f"产物: {artifact_path(archive, state)}")
+
+
+def cmd_repair_branch_decision(a: argparse.Namespace) -> None:
+    archive, state = Path(a.archive).resolve(), load(Path(a.archive).resolve())
+    pending = state.get("pending_repair_branch_decision") or {}
+    if state["status"] != "awaiting_repair_branch_decision" or state["stage"] != "implementation":
+        raise SystemExit("当前没有等待用户选择的测试修复分支策略")
+    if pending.get("implementation_version") != state["version"]:
+        raise SystemExit("修复分支决策与当前 implementation 版本不匹配")
+    branch = (a.branch.strip() if a.branch else None) or None
+    if a.strategy == "reuse" and branch:
+        raise SystemExit("复用原有分支时不能提供 --branch")
+    if a.strategy == "new" and branch:
+        check = subprocess.run(["git", "check-ref-format", "--branch", branch], text=True, capture_output=True)
+        if check.returncode != 0:
+            raise SystemExit(f"无效的修复分支名称: {branch}")
+    current = state.get("implementation_branch")
+    if not current:
+        raise SystemExit("修复分支决策缺少上一轮代码实现分支")
+    if a.strategy == "new" and branch == current["name"]:
+        raise SystemExit("选择新建修复分支时，--branch 必须不同于当前实现分支")
+    decision = {
+        "at": now(), "action": "repair_branch_decision", "responder": a.responder,
+        "strategy": a.strategy, "requested_branch": branch,
+        "implementation_version": state["version"], "source_branch": current["name"],
+        "failed_test_version": pending.get("failed_test_version"),
+    }
+    record_path = archive / "reviews" / f"implementation_v{state['version']:03d}_repair-branch-{a.strategy}_{dt.datetime.now():%Y%m%d%H%M%S%f}.json"
+    record_path.write_text(json.dumps(decision, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    decision["record"] = str(record_path.relative_to(archive))
+    state.setdefault("repair_branch_decisions", []).append(decision)
+    state["history"].append(decision)
+    state["repair_branch_mode"] = a.strategy
+    state["repair_branch_version"] = state["version"]
+    state["repair_branch_requested"] = branch
+    state.pop("pending_repair_branch_decision", None)
+    state["status"] = "awaiting_dispatch"
+    target = artifact_path(archive, state)
+    if not target.exists():
+        target.write_text(template(state, state["stage"], state["version"]), encoding="utf-8")
+    save(archive, state)
+    cmd_status(argparse.Namespace(archive=str(archive)))
 
 
 def section_text(text: str, heading: str) -> str:
@@ -818,11 +956,16 @@ def cmd_submit(a: argparse.Namespace) -> None:
         raise SystemExit("当前产物没有匹配的成功子 Agent 执行记录")
     if stage == "prd_intake":
         validate_original_input(archive, state)
-    if stage == "implementation":
-        expected_branch = (last_run.get("implementation_branch") or {}).get("name")
+    if stage in {"implementation", "test_execution"}:
+        expected_branch = (state.get("implementation_branch") or {}).get("name")
         current_branch = git(Path(state["repo"]), "branch", "--show-current")
         if not expected_branch or current_branch != expected_branch:
-            raise SystemExit(f"实施产物必须在已准备分支提交；期望 {expected_branch}，当前 {current_branch}")
+            raise SystemExit(f"实现与测试产物必须在同一交付分支提交；期望 {expected_branch}，当前 {current_branch}")
+    if stage == "summary" and state.get("delivery_branch"):
+        expected_branch = state["delivery_branch"]["name"]
+        current_branch = git(Path(state["repo"]), "branch", "--show-current")
+        if current_branch != expected_branch:
+            raise SystemExit(f"最终总结必须在已通过测试的交付分支提交；期望 {expected_branch}，当前 {current_branch}")
     errors = validate_artifact(path, stage, state, last_run)
     if errors:
         raise SystemExit("提交校验失败:\n- " + "\n- ".join(errors))
@@ -847,11 +990,31 @@ def cmd_submit(a: argparse.Namespace) -> None:
             raise SystemExit("测试执行提交必须提供 --result passed|failed")
         event["result"], state["test_cycles"] = a.result, state["test_cycles"] + 1
         if a.result == "failed":
+            failed_test_version = state["version"]
             state["stage"] = "implementation"
             state["version"] = state["stage_versions"].get("implementation", 0) + 1
             state["stage_versions"]["implementation"] = state["version"]
-            state["status"] = "awaiting_dispatch"
+            try:
+                suggested_new_branch = state.get(
+                    "default_branch_pattern", "tmp/{iteration_name}-{implementation_version}"
+                ).format(
+                    iteration_name=safe_name(state["iteration_name"]), implementation_version=state["version"],
+                )
+            except (KeyError, ValueError):
+                suggested_new_branch = None
+            state.pop("repair_branch_mode", None)
+            state.pop("repair_branch_version", None)
+            state.pop("repair_branch_requested", None)
+            state["pending_repair_branch_decision"] = {
+                "failed_test_version": failed_test_version,
+                "implementation_version": state["version"],
+                "current_branch": (state.get("implementation_branch") or {}).get("name"),
+                "suggested_new_branch": suggested_new_branch,
+                "asked_at": now(),
+            }
+            state["status"] = "awaiting_repair_branch_decision"
         else:
+            state["delivery_branch"] = state.get("implementation_branch")
             advance(state)
     elif stage == "summary":
         improvement = write_improvement(archive, state, path)
@@ -1081,6 +1244,7 @@ def parser() -> argparse.ArgumentParser:
     x = sub.add_parser("agent-complete"); x.add_argument("--archive", required=True); x.add_argument("--run-id", required=True); x.add_argument("--result", required=True, choices=["succeeded", "failed"]); x.add_argument("--evidence", required=True); x.set_defaults(func=cmd_agent_complete)
     x = sub.add_parser("abandon"); x.add_argument("--archive", required=True); x.add_argument("--run-id", required=True); x.add_argument("--reason", required=True); x.set_defaults(func=cmd_abandon)
     x = sub.add_parser("submit"); x.add_argument("--archive", required=True); x.add_argument("--result", choices=["needs-clarification", "ready", "passed", "failed"]); x.set_defaults(func=cmd_submit)
+    x = sub.add_parser("repair-branch-decision"); x.add_argument("--archive", required=True); x.add_argument("--strategy", required=True, choices=["reuse", "new"]); x.add_argument("--responder", required=True); x.add_argument("--branch", help="strategy=new 时可指定精确修复分支；省略则使用默认分支规则"); x.set_defaults(func=cmd_repair_branch_decision)
     x = sub.add_parser("clarify"); x.add_argument("--archive", required=True); x.add_argument("--responder", required=True)
     response = x.add_mutually_exclusive_group(required=True); response.add_argument("--response"); response.add_argument("--response-file"); x.set_defaults(func=cmd_clarify)
     x = sub.add_parser("customize"); x.add_argument("--archive", required=True); x.add_argument("--target", choices=["user", "self"], default="user"); x.add_argument("--mode", choices=["append", "replace"], default="append"); x.add_argument("--actor", required=True)

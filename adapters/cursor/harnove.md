@@ -35,4 +35,10 @@ fresh child. Every reviewed document puts a concise overview and previous-versio
 before details. Version v002 and later add a summarized evolution ordered from the current
 version through v001; never modify historical artifacts to retrofit that section.
 
+After every failed test, stop and ask whether the user wants to repair on the current
+implementation branch or create a new repair branch. Do not dispatch before recording the choice.
+For reuse, switch back to the current branch. For new, create the requested or default per-version
+branch from the current branch; it then becomes the branch for testing and delivery. Both choices
+require a fresh repair child, and every later test failure repeats the question.
+
 Never approve a human gate on the user's behalf and never invent scope beyond the PRD.

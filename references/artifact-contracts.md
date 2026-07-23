@@ -177,6 +177,19 @@ Children cannot approve gates or invoke state commands. An approved feedback pre
 clarification revision, test failure, crash, or abandonment requires a new child identity and
 run. Rejection feedback alone does not permit a new child.
 
+## Test-repair branch decision contract
+
+The first implementation dispatch creates and records the current implementation branch using
+the user rule when supplied or the configured default otherwise. Every failed test enters
+`awaiting_repair_branch_decision`; no repair work order or child may start until the user chooses.
+
+`reuse` switches back to the current implementation branch and rejects any other branch.
+`new` creates a new branch from the current implementation branch, using the user's exact name
+when supplied or the 5.1.0 per-version default otherwise. The newly created branch becomes the
+current implementation branch. Test execution runs on that current branch, and a passed test
+records it as the delivery branch. Every repair version still requires a fresh subagent. Archive
+each decision immutably under `reviews/`, and ask again after every later failed test.
+
 ## Human review contract
 
 Approval freezes the named artifact version as downstream baseline. Rejection requires

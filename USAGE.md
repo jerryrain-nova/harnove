@@ -9,7 +9,7 @@
 3. 基于实时仓库代码完成技术方案与代码修改方案，并分别人工审核。
 4. 完成测试方案设计与人工审核。
 5. 创建并切换独立实施分支，按批准方案修改代码。
-6. 编写并执行测试；失败时退回新的实施轮次和新分支。
+6. 编写并执行测试；失败时先询问用户是在当前实现分支修复还是新建修复分支。
 7. 测试通过后，在总结阶段抽象当前项目结构并沉淀经验。
 
 技术方案和代码修改方案会在关系复杂时使用 Mermaid 图辅助审核。每个环节由
@@ -316,6 +316,34 @@ ID，也拒绝没有成功子 Agent 记录的产物提交。
   --branch "feature/order-batch-export-round-1"
 ```
 
+测试失败返回新的实施版本时，状态会停在 `awaiting_repair_branch_decision`，主 Agent
+必须告知当前实现分支和建议的新分支名，并询问用户，不能直接派发修复子 Agent。
+
+选择在当前分支修复：
+
+```powershell
+.\harnove\run.ps1 repair-branch-decision `
+  --archive <迭代目录> `
+  --strategy reuse `
+  --responder "产品负责人"
+```
+
+选择新建修复分支，可以指定精确名称：
+
+```powershell
+.\harnove\run.ps1 repair-branch-decision `
+  --archive <迭代目录> `
+  --strategy new `
+  --responder "产品负责人" `
+  --branch "feature/order-batch-export-fix-2"
+```
+
+省略 `--branch` 时，按 5.1.0 的规则使用当前 implementation 版本生成默认新分支。
+主 Agent 必须原样展示状态中的 `suggested_new_branch`，例如 `tmp/order-batch-export-2`，
+不得自行添加 `v` 或把轮次补零。
+新分支一定从当前实现分支创建，并在创建后成为下一轮测试和最终交付分支。无论选择
+复用还是新建，都必须为修复版本使用全新的子 Agent；再次测试失败时会重新询问。
+
 ## 8. 提交阶段文档
 
 子 Agent 成功完成、状态变为 `ready_for_submit` 后，由主 Agent 执行：
@@ -573,7 +601,7 @@ Harnove 核心和项目运行内容必须分开处理。
 `c` 归零；架构变更或架构优化时增加 `a` 并将 `b.c` 归零。可执行：
 
 ```powershell
-python harnove/scripts/version_policy.py --previous 5.0.0 --current 5.1.0 --change-type feature
+python harnove/scripts/version_policy.py --previous 5.1.1 --current 5.2.0 --change-type feature
 ```
 
 完成修改后更新 `harnove-package.json` 中的版本号，并执行三组自测：
@@ -589,7 +617,7 @@ python harnove/scripts/package_self_test.py
 ```powershell
 python harnove/scripts/export_package.py `
   --source harnove `
-  --output releases/harnove-5.1.0
+  --output releases/harnove-5.2.0
 ```
 
 输出目录必须不存在或为空。打包器只复制核心白名单文件，因此未知项目文件也不会被误带入。输出中的 `package-build.json` 记录版本、配置 Schema 和所有发行文件的 SHA-256，可用于交付校验。

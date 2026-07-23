@@ -74,7 +74,8 @@ Feedback enters the document-change preview loop below; it does not create a ver
   user's branch rule when present; otherwise use `tmp/{iteration-name}-{implementation-version}`.
   Modify only approved scope and record deviations and Git evidence.
 - `test_execution`: inspect the actual diff, implement and run executable tests, then submit
-  `passed|failed`. Failure creates a new implementation version and fresh child.
+  `passed|failed`. Failure creates a new implementation version but stops before dispatch so the
+  user can choose the repair branch strategy as described below.
 - `summary`: reconcile all evidence, inspect the completed current repository, and update
   `structure/` with an abstract current-project view covering `功能模块`, `代码框架`, and
   `结构定义和关系` plus code evidence. Then score every stage, identify root causes, extract
@@ -82,6 +83,25 @@ Feedback enters the document-change preview loop below; it does not create a ver
   happens only here.
 
 Candidate PRD, technical design, code plan, and test design require real human approval.
+
+## Ask how to branch for every test repair
+
+After a failed test submission, stop at `awaiting_repair_branch_decision`. Tell the user the
+current implementation branch and the suggested default new-branch name, then ask whether to
+repair on the current branch or create a new repair branch.
+Never choose on the user's behalf and never dispatch the repair child before the decision.
+Relay `pending_repair_branch_decision.suggested_new_branch` exactly; do not add `v`, zero-pad the
+version, or reconstruct the name. The default is normally like `tmp/order-export-2`.
+
+- Reuse: run `repair-branch-decision --strategy reuse --responder <name>`. The repair version
+  switches back to the current implementation branch and rejects a different `--branch`.
+- New branch: run `repair-branch-decision --strategy new --responder <name>`; optionally add
+  `--branch <exact-name>`. Dispatch then creates the new branch from the current implementation
+  branch, following the 5.1.0 per-version branch behavior when no exact name is supplied.
+
+Both choices require a fresh repair subagent. After a new branch is created, it becomes the
+current implementation branch for the next test cycle and, if tests pass, the delivery branch.
+If another test cycle fails, ask the same question again.
 
 ## Preview feedback impact before revising documents
 
