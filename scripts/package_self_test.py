@@ -53,6 +53,7 @@ def main() -> None:
         assert not (exported / "config.json").exists()
         assert not (exported / "runtime").exists()
         assert not (exported / "skill").exists()
+        assert (exported / "README.md").is_file()
         build = json.loads((exported / "package-build.json").read_text(encoding="utf-8"))
         assert build["version"] == json.loads((source / "harnove-package.json").read_text(encoding="utf-8"))["version"]
         assert build["version_policy"]["new_feature"] == "increment_minor_b"
@@ -61,6 +62,7 @@ def main() -> None:
         target.mkdir()
         run(str(exported / "init.py"), "--project", str(target))
         assert (target / ".harnove" / "config.json").is_file()
+        assert (target / ".harnove" / "README.md").is_file()
         assert (target / ".harnove" / "runtime" / "harnove.py").is_file()
         assert (target / ".harnove" / "iterations").is_dir()
         assert (target / ".harnove" / "improve").is_dir()
