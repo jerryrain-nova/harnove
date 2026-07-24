@@ -17,7 +17,7 @@ Read the requirement input and propose one concise, branch-safe iteration name t
 the business change. Ask the user to choose `expert` (专家模式) or `agile` (敏捷模式), and to
 confirm the suggestion or provide a replacement. Explain briefly that expert mode keeps the full
 design-and-test workflow while agile mode keeps requirements, code planning, implementation,
-and summary. Do not run `init` until the user explicitly supplies or accepts both. Pass them
+and an implementation-time structure refresh. Do not run `init` until the user explicitly supplies or accepts both. Pass them
 through `--iteration-name` and `--mode`; never silently substitute them. Existing callers that
 omit `--mode` remain in `expert` for compatibility.
 
@@ -33,7 +33,8 @@ For every `(stage, version)`:
 2. Choose a globally new subagent/task ID for this iteration.
 3. Run `dispatch --archive <dir> --agent-id <id> --orchestrator <name>`. For implementation,
    inspect the custom snapshot for a user branch rule and pass the resolved exact name through
-   `--branch`; otherwise let Harnove use its default branch.
+   `--branch`; otherwise let Harnove use its default branch. In agile mode, do not dispatch until
+   the mandatory implementation-branch decision below is recorded.
 4. Spawn a fresh platform-native subagent and give it only the generated work-order path.
    Never reuse a subagent across stages, versions, approved feedback revisions, clarification revisions, or
    test-fix cycles. If the platform cannot create subagents, stop and report the limitation.
@@ -117,13 +118,14 @@ cover any affected code or test sections.
 
 In `workflow_mode=agile`, use exactly:
 
-`prd_intake → code_plan → implementation → summary`
+`prd_intake → code_plan → implementation`
 
-Do not create, dispatch, or infer `technical_design`, `test_design`, or `test_execution`.
+Do not create, dispatch, or infer `technical_design`, `test_design`, `test_execution`, or
+`summary`.
 Continue to use a fresh child for every stage/version and enforce all custom context, timeout,
 lease, review, live-code, branch, and archive rules.
-Create only `00-input/`, `02-code-plan/`, `04-implementation/`, and `06-summary/` for agile
-stages, plus the same common `reviews/`, `agent-runs/`, and state files as expert mode. Never
+Create only `00-input/`, `02-code-plan/`, and `04-implementation/` for agile stages, plus the
+same common `reviews/`, `agent-runs/`, and state files as expert mode. Never
 create empty expert-only stage directories in a new agile archive.
 
 - `prd_intake`: accept natural language or a PRD, clarify every material boundary and ambiguity,
@@ -136,12 +138,16 @@ create empty expert-only stage directories in a new agile archive.
   change plan quality as expert code planning. Set `DESIGN_MODE: AGILE` and
   `CHANGE_SCOPE: AGILE`. This child designs only; it must not modify product code. Present the
   complete plan and require explicit human approval.
-- `implementation`: after plan approval, reuse the exact expert implementation dispatch,
-  branch creation/switching, approved scope, Git evidence, and deviation rules.
-- `summary`: run immediately after implementation submission, without creating a test stage.
-  Reconcile actual code evidence, state explicitly that agile mode has no independent test
-  execution, update `structure/`, write `improve/` and custom experience, and include
-  `代码改动点` summarizing actual files, symbols, behavior changes, and deviations for the user.
+- `implementation`: after plan approval, create and switch to the normal implementation branch
+  only after the state stops at `awaiting_implementation_branch_decision`. Proactively show the
+  user both `current_branch` and `suggested_new_branch`, then ask them to choose the current
+  original branch or a new branch. Record the answer with
+  `implementation-branch-decision --strategy current|new --responder <human>`; for `new`, add
+  `--branch <exact-name>` when the user supplies one. Never infer a choice or dispatch before
+  this command succeeds. Then implement the approved scope, capture Git evidence, and inspect the
+  completed live repository and update `structure/` with functional modules, code framework,
+  structure definitions/relationships, and code evidence. A valid implementation submission
+  completes the agile iteration directly without a summary stage.
 
 Agile document feedback uses the same preview-before-regeneration loop. Approval of a change
 preview only creates the next document version; it never approves that new version. Expert-only
@@ -238,8 +244,8 @@ remains the authoritative index and must still contain the change tree and evide
 
 Treat `HARNOVE_HOME/structure/` as project-owned post-completion abstraction. Before init, it
 may be inspected only for the scale classification described above; it is never an architecture
-or design input. Use Markdown by default and HTML only when necessary. During summary, inspect
-the completed live repository and update structure so
+or design input. Use Markdown by default and HTML only when necessary. During expert summary or
+agile implementation, inspect the completed live repository and update structure so
 it covers functional modules, code framework, and structure definitions/relationships with
 file or symbol evidence. Declare `STRUCTURE_STATUS: UPDATED`. Never package or publish
 structure records as Harnove core files.
@@ -247,7 +253,7 @@ structure records as Harnove core files.
 ## Reuse and grow experience
 
 Require every subagent to read the iteration's `00-input/*经验复用上下文.md`, cite adopted
-experience, and explain why irrelevant guidance does not apply. On successful summary
+experience, and explain why irrelevant guidance does not apply. On successful expert summary
 submission, Harnove writes an immutable experience record under `HARNOVE_HOME/improve/`.
 Future iterations automatically snapshot the accumulated records. Never package, publish,
 or include `iterations/`, `improve/`, `structure/`, `custom/`, or `timeout-policy.json` in
@@ -262,7 +268,7 @@ both before beginning an iteration, and require every fresh subagent to read tha
 lessons for this project. When the user adds a durable request during an iteration, record it
 before the next child is dispatched with `customize --target user --content <text> --actor <name>`.
 
-In the final summary, declare `FEEDBACK_EXPERIENCE_STATUS: CAPTURED` when user clarification,
+In the expert final summary, declare `FEEDBACK_EXPERIENCE_STATUS: CAPTURED` when user clarification,
 review feedback, or custom updates exist, and distill them into concrete reusable rules. On
 successful completion, Harnove appends that section to `custom/self.md`. If no feedback exists,
 declare `FEEDBACK_EXPERIENCE_STATUS: NONE`; do not fabricate experience.

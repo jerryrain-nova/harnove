@@ -28,15 +28,15 @@ only the stages that agile mode owns:
 ```text
 00-input/              Original input, requirement versions, clarifications, and baseline
 02-code-plan/          Code-change plan versions
-04-implementation/     Implementation record and Git evidence
-06-summary/            Final record, structure abstraction evidence, and retrospective
+04-implementation/     Implementation record, Git evidence, and structure-update evidence
 reviews/                Immutable human review records
 agent-runs/             Immutable work orders, leases, and completion evidence
 state.json              Workflow state and history
 ```
 
-Never create `01-technical-design/`, `03-test-design/`, or `05-test-execution/` for a newly
-initialized agile iteration. This directory rule does not delete or rewrite historical archives.
+Never create `01-technical-design/`, `03-test-design/`, `05-test-execution/`, or `06-summary/`
+for a newly initialized agile iteration. This directory rule does not delete or rewrite
+historical archives.
 
 The archive is always under `HARNOVE_HOME/iterations/`. Reusable experience lives in
 `HARNOVE_HOME/improve/`; post-completion project abstraction lives in
@@ -54,14 +54,15 @@ Initialization records exactly one immutable iteration mode:
 - `expert` (default for backward compatibility):
   `prd_intake → technical_design → code_plan → test_design → implementation → test_execution → summary`.
 - `agile`:
-  `prd_intake → code_plan → implementation → summary`.
+  `prd_intake → code_plan → implementation`.
 
 The orchestrator asks the user to choose before init and passes `--mode expert|agile`. Old states
 migrate to `expert`. Agile state must never create directories, versions, work orders, approvals,
-or artifacts for technical design, test design, or test execution. Expert routing and validations remain
-unchanged by agile rules. Both modes enforce fresh children, custom context, adaptive leases,
-explicit document approval, implementation branches, Git evidence, summary structure updates,
-and experience persistence.
+or artifacts for technical design, test design, test execution, or summary. Expert routing and
+validations remain unchanged by agile rules. Both modes enforce fresh children, custom context,
+adaptive leases, explicit document approval, Git evidence, and post-implementation structure
+updates. Historical agile iterations already created with a summary stage may finish that legacy
+stage, but new agile iterations must not create it.
 
 ## Project-scale and adaptive-timeout contract
 
@@ -196,10 +197,18 @@ This entire stage is expert-only.
 
 ### Implementation record and branch
 
-Before the implementation child starts, Harnove creates and switches to a new branch. Use the
-user's exact custom branch rule when one exists; otherwise use
-`tmp/{iteration-name}-{implementation-version}`. Record the branch and previous branch in the
-work order and state. Implementation must not start on the previous branch.
+Before an expert implementation child starts, Harnove creates and switches to a new branch. The
+same behavior is the agile default. Use the user's exact custom branch rule when one exists;
+otherwise use `tmp/{iteration-name}-{implementation-version}`.
+
+After agile code-plan approval, stop at `awaiting_implementation_branch_decision`. The
+orchestrator must proactively show `current_branch` and `suggested_new_branch`, then ask the user
+to choose. Record the answer through
+`implementation-branch-decision --strategy current|new --responder <human>`; `new` may include
+the user's exact `--branch`, otherwise it uses the suggested name. Reject implementation
+dispatch until this immutable decision exists. Never infer a choice from silence or a default.
+If the checked-out branch changes after the decision, stop before implementation and require a
+new confirmation. Record current-branch execution with `source=agile_current_branch`.
 
 Include approved artifacts, baseline commit, resulting commit or working-tree diff, changed
 files, requirement/change IDs per file, commands, deviations, approvals, and limitations.
@@ -217,19 +226,12 @@ or claim that independent tests ran.
 
 ### Final summary and structure abstraction
 
+This stage is expert-only for newly initialized iterations.
 Include background, approved decisions, actual changes, test conclusion, deploy/rollback
-notes, residual risks, and complete traceability. Expert mode uses 1-10 evidence-based scores
-for design, planning, testing, implementation, execution, and workflow. Agile mode scores only
-requirements clarification, code planning, implementation, summary, and workflow; mark omitted
-expert-only stages `N/A` without inventing numeric evidence. Include `根因`, `经验总结`,
+notes, residual risks, and complete traceability. Use 1-10 evidence-based scores for design,
+planning, testing, implementation, execution, and workflow. Include `根因`, `经验总结`,
 `下次复用规则`, and `用户反馈经验` with exactly one
 `FEEDBACK_EXPERIENCE_STATUS: CAPTURED|NONE`.
-
-In agile mode, `测试结论` explicitly states that the selected workflow has no independent test
-stage; it must not fabricate passed test evidence. Add `代码改动点` summarizing actual changed
-files, symbols, behavior, scope deviations, and relevant Git evidence for presentation to the
-user. Agile implementation submission records its implementation branch as the delivery branch
-and advances directly to summary.
 
 During summary, inspect the completed current repository and update `structure/`
 with an abstract current-project view. It must cover `功能模块`, `代码框架`, and
@@ -237,6 +239,13 @@ with an abstract current-project view. It must cover `功能模块`, `代码框�
 in `项目结构抽象`. Submission fails unless structure content changes relative to summary
 dispatch. Before init, structure may be read only for project-scale classification.
 Requirements, technical design, and code planning must not read it as an architecture input.
+
+For new agile iterations, the implementation child performs that same live-repository structure
+abstraction after finishing the approved code changes. Implementation submission fails unless
+`structure/` changes relative to dispatch and contains `功能模块`, `代码框架`, and
+`结构定义和关系`. A valid submission records the implementation branch as the delivery branch,
+stores structure hashes, and marks the iteration `complete` without creating summary, improve,
+or custom-experience artifacts.
 
 ## Experience reuse contract
 

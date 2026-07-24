@@ -55,7 +55,9 @@ def fill_current(archive: Path) -> None:
     text = text.replace("待细化输入", "需求输入").replace("待细化处理", "方案处理").replace("待细化输出", "可验证输出")
     text = text.replace("待细化变更一", "订单导出功能").replace("待细化变更二", "权限与数量边界")
     structure_file = Path(state["structure_root"]) / "project-structure.md"
-    if state["stage"] == "summary":
+    if state["stage"] == "summary" or (
+        state["stage"] == "implementation" and harnove.agile_finishes_at_implementation(state)
+    ):
         structure_file.write_text(
             f"# 项目结构解读\n\n- 最近迭代：{state['iteration_id']}\n\n## 功能模块\n\n订单模块负责查询与导出。\n\n"
             "## 代码框架\n\n采用分层服务结构。\n\n## 结构定义和关系\n\n控制器调用服务，服务访问仓储。\n\n"
@@ -131,7 +133,10 @@ REQ-001：证明局部实现满足需求且不会越过批准范围或破坏同�
 def run_subagent(archive: Path, writer=None, branch: str | None = None) -> str:
     before = harnove.load(archive)
     agent_id = f"agent-{before['stage']}-v{before['version']}-{len(before.get('used_agent_ids', [])) + 1}"
-    harnove.cmd_dispatch(argparse.Namespace(archive=str(archive), agent_id=agent_id, orchestrator="smoke-main", branch=branch))
+    harnove.cmd_dispatch(argparse.Namespace(
+        archive=str(archive), agent_id=agent_id, orchestrator="smoke-main",
+        branch=branch,
+    ))
     state = harnove.load(archive)
     run_id = state["active_agent"]["run_id"]
     target = harnove.artifact_path(archive, state)
@@ -163,6 +168,12 @@ def review(
 
 def decide_repair_branch(archive: Path, strategy: str, branch: str | None = None) -> None:
     harnove.cmd_repair_branch_decision(argparse.Namespace(
+        archive=str(archive), strategy=strategy, responder="smoke-human", branch=branch,
+    ))
+
+
+def decide_implementation_branch(archive: Path, strategy: str, branch: str | None = None) -> None:
+    harnove.cmd_implementation_branch_decision(argparse.Namespace(
         archive=str(archive), strategy=strategy, responder="smoke-human", branch=branch,
     ))
 
@@ -605,9 +616,9 @@ def test_agile_mode_is_independent(root: Path) -> None:
     archive = next((root / "iterations").glob("*_SMOKE-005_agile-flow"))
     state = harnove.load(archive)
     assert state["workflow_mode"] == "agile"
-    assert harnove.workflow_stages(state) == ["prd_intake", "code_plan", "implementation", "summary"]
+    assert harnove.workflow_stages(state) == ["prd_intake", "code_plan", "implementation"]
     assert {path.name for path in archive.iterdir() if path.is_dir()} == {
-        "00-input", "02-code-plan", "04-implementation", "06-summary", "reviews", "agent-runs",
+        "00-input", "02-code-plan", "04-implementation", "reviews", "agent-runs",
     }
     assert (archive / "00-input" / "clarifications").is_dir()
     assert not any((archive / folder).exists() for folder in [
@@ -652,20 +663,48 @@ def test_agile_mode_is_independent(root: Path) -> None:
     harnove.cmd_submit(argparse.Namespace(archive=str(archive), result=None))
     review(archive, "approve")
     state = harnove.load(archive)
-    assert state["stage"] == "implementation" and state["status"] == "awaiting_dispatch"
+    assert state["stage"] == "implementation"
+    assert state["status"] == "awaiting_implementation_branch_decision"
     assert set(state["approved"]) == {"prd_intake", "code_plan"}
     assert state["stage_versions"]["test_design"] == 0
+    assert state["pending_implementation_branch_decision"]["current_branch"] == harnove.git(
+        root, "branch", "--show-current",
+    )
+    assert state["pending_implementation_branch_decision"]["suggested_new_branch"] == "tmp/agile-flow-1"
+    try:
+        harnove.cmd_dispatch(argparse.Namespace(
+            archive=str(archive), agent_id="premature-agile-implementation",
+            orchestrator="smoke-main", branch=None,
+        ))
+        raise AssertionError("agile implementation dispatched before the user selected a branch")
+    except SystemExit as exc:
+        assert "awaiting_implementation_branch_decision" in str(exc)
 
+    branch_gate_state = json.loads(json.dumps(harnove.load(archive)))
+    decide_implementation_branch(archive, "new", "feature/agile-flow")
+    new_decision_state = harnove.load(archive)
+    assert new_decision_state["implementation_branch_decision"]["strategy"] == "new"
+    assert new_decision_state["implementation_branch_decision"]["requested_branch"] == "feature/agile-flow"
+    harnove.save(archive, branch_gate_state)
+
+    original_branch = harnove.git(root, "branch", "--show-current")
+    decide_implementation_branch(archive, "current")
+    decision_state = harnove.load(archive)
+    assert decision_state["status"] == "awaiting_dispatch"
+    assert decision_state["implementation_branch_decision"]["strategy"] == "current"
+    assert (archive / decision_state["implementation_branch_decision"]["record"]).is_file()
     submit(archive)
     state = harnove.load(archive)
-    assert state["stage"] == "summary"
+    assert state["stage"] == "implementation" and state["status"] == "complete"
     assert state["stage_versions"]["test_execution"] == 0
     assert state["delivery_branch"]["name"] == state["implementation_branch"]["name"]
-    submit(archive)
-    state = harnove.load(archive)
-    assert state["status"] == "complete" and state["test_cycles"] == 0
-    summary = harnove.artifact_path(archive, state)
-    assert "## 代码改动点" in summary.read_text(encoding="utf-8")
+    assert state["implementation_branch"]["name"] == original_branch
+    assert state["implementation_branch"]["source"] == "agile_current_branch"
+    assert harnove.git(root, "branch", "--show-current") == original_branch
+    assert state["structure_record"]["source_stage"] == "implementation"
+    assert state["structure_record"]["hashes"]
+    assert state["test_cycles"] == 0
+    assert not (archive / "06-summary").exists()
 
 
 def test_schema8_branch_migration(root: Path) -> None:
