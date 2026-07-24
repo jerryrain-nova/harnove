@@ -183,6 +183,12 @@ def workflow_stages(state: dict) -> list[str]:
     return WORKFLOW_SEQUENCES[mode]
 
 
+def archive_stage_folders(workflow_mode: str) -> list[str]:
+    if workflow_mode not in WORKFLOW_SEQUENCES:
+        raise SystemExit(f"不支持的工作流模式: {workflow_mode}")
+    return sorted({DIRS[stage] for stage in WORKFLOW_SEQUENCES[workflow_mode]})
+
+
 def inside(path: Path, parent: Path) -> bool:
     try:
         path.resolve().relative_to(parent.resolve())
@@ -788,7 +794,7 @@ def cmd_init(a: argparse.Namespace) -> None:
     archive = root / f"{dt.date.today():%Y%m%d}_{ident}_{iteration_name}"
     if archive.exists():
         raise SystemExit(f"归档目录已存在: {archive}")
-    for folder in sorted(set(DIRS.values())) + ["reviews", "00-input/clarifications", "agent-runs"]:
+    for folder in archive_stage_folders(workflow_mode) + ["reviews", "00-input/clarifications", "agent-runs"]:
         (archive / folder).mkdir(parents=True, exist_ok=True)
     baseline = git(repo, "rev-parse", "HEAD")
     state = {
@@ -867,9 +873,9 @@ def cmd_dispatch(a: argparse.Namespace) -> None:
     stage, version = state["stage"], state["version"]
     if (
         state.get("workflow_mode") == "agile" and stage == "code_plan"
-        and not state.get("agile_requirements_confirmation")
+        and "prd_intake" not in state.get("approved", {})
     ):
-        raise SystemExit("敏捷模式进入代码方案前，必须归档用户对澄清完毕及完整需求基线的明确批准")
+        raise SystemExit("敏捷模式进入代码方案前，当前 READY PRD 必须获得用户明确批准")
     refresh_timeout_profile(state)
     timeout_minutes = state["timeout_profile"]["stage_minutes"][stage]
     expires_at = (
@@ -1480,6 +1486,8 @@ def cmd_review(a: argparse.Namespace) -> None:
                     "version": version, "artifact": str(path.relative_to(archive)),
                     "sha256": digest(path), "reviewer": reviewer,
                     "human_confirmation": human_confirmation,
+                    "approval_effect": "approved_ready_prd_implies_no_pending_clarification",
+                    "no_pending_clarification": True,
                     "review_record": str(review_path.relative_to(archive)),
                 }
         state.pop("approved_change_preview", None)

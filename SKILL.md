@@ -122,13 +122,16 @@ In `workflow_mode=agile`, use exactly:
 Do not create, dispatch, or infer `technical_design`, `test_design`, or `test_execution`.
 Continue to use a fresh child for every stage/version and enforce all custom context, timeout,
 lease, review, live-code, branch, and archive rules.
+Create only `00-input/`, `02-code-plan/`, `04-implementation/`, and `06-summary/` for agile
+stages, plus the same common `reviews/`, `agent-runs/`, and state files as expert mode. Never
+create empty expert-only stage directories in a new agile archive.
 
 - `prd_intake`: accept natural language or a PRD, clarify every material boundary and ambiguity,
-  and ask the user whether clarification is complete. Submit a ready candidate only when the
-  user-controlled boundaries are explicit. Present the complete READY requirement baseline and
-  ask for one explicit approval whose wording confirms both that all boundaries/ambiguities are
-  resolved and that the current complete baseline is approved. Archive that confirmation before
-  code planning; do not create a separate implicit completeness gate.
+  asking the user only when clarification questions actually exist. Submit a ready candidate
+  only when the user-controlled boundaries are explicit. Present the complete READY PRD and ask
+  for its explicit approval. Treat approval of that PRD as confirmation that no clarification
+  request remains; do not require a second decision or special wording that separately confirms
+  clarification completion.
 - `code_plan`: inspect the live repository and produce the same file/module/symbol-level code
   change plan quality as expert code planning. Set `DESIGN_MODE: AGILE` and
   `CHANGE_SCOPE: AGILE`. This child designs only; it must not modify product code. Present the

@@ -84,6 +84,13 @@ def main() -> None:
         agile_archive = next((project / ".harnove" / "iteration-records").glob("*_ITER-AGILE_portable-agile"))
         agile_state = json.loads((agile_archive / "state.json").read_text(encoding="utf-8"))
         assert agile_state["workflow_mode"] == "agile"
+        assert {path.name for path in agile_archive.iterdir() if path.is_dir()} == {
+            "00-input", "02-code-plan", "04-implementation", "06-summary", "reviews", "agent-runs",
+        }
+        assert (agile_archive / "00-input" / "clarifications").is_dir()
+        assert not any((agile_archive / folder).exists() for folder in [
+            "01-technical-design", "03-test-design", "05-test-execution",
+        ])
 
         # A user-modified managed file blocks an update unless force is explicit.
         installed_skill = project / ".harnove" / "skill" / "harnove" / "SKILL.md"

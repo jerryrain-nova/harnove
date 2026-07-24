@@ -7,7 +7,7 @@ version, author role, status, source PRD path/hash, repository baseline, and a `
 section where applicable. Use `REQ-001` style IDs. Distinguish facts, PRD statements, live
 code observations, assumptions, and open questions.
 
-The archive layout is fixed:
+The expert archive layout is:
 
 ```text
 00-input/              Original input, PRD versions, clarifications, and requirement baseline
@@ -21,6 +21,22 @@ reviews/                Immutable human review records
 agent-runs/             Immutable work orders, leases, and completion evidence
 state.json              Workflow state and history
 ```
+
+Agile archives keep the same stage-to-folder mapping and common archive structure, but create
+only the stages that agile mode owns:
+
+```text
+00-input/              Original input, requirement versions, clarifications, and baseline
+02-code-plan/          Code-change plan versions
+04-implementation/     Implementation record and Git evidence
+06-summary/            Final record, structure abstraction evidence, and retrospective
+reviews/                Immutable human review records
+agent-runs/             Immutable work orders, leases, and completion evidence
+state.json              Workflow state and history
+```
+
+Never create `01-technical-design/`, `03-test-design/`, or `05-test-execution/` for a newly
+initialized agile iteration. This directory rule does not delete or rewrite historical archives.
 
 The archive is always under `HARNOVE_HOME/iterations/`. Reusable experience lives in
 `HARNOVE_HOME/improve/`; post-completion project abstraction lives in
@@ -41,8 +57,8 @@ Initialization records exactly one immutable iteration mode:
   `prd_intake → code_plan → implementation → summary`.
 
 The orchestrator asks the user to choose before init and passes `--mode expert|agile`. Old states
-migrate to `expert`. Agile state must never create versions, work orders, approvals, or artifacts
-for technical design, test design, or test execution. Expert routing and validations remain
+migrate to `expert`. Agile state must never create directories, versions, work orders, approvals,
+or artifacts for technical design, test design, or test execution. Expert routing and validations remain
 unchanged by agile rules. Both modes enforce fresh children, custom context, adaptive leases,
 explicit document approval, implementation branches, Git evidence, summary structure updates,
 and experience persistence.
@@ -116,10 +132,12 @@ rejection is immutable but produces a new version only after its change preview 
 approval; only the approved version/hash becomes downstream scope.
 
 In agile mode, this is the requirements-clarification stage rather than a separate product-design
-stage. After the READY artifact is presented, use one explicit human review whose exact wording
-confirms both that all boundaries and ambiguities are resolved and that the current complete
-requirement baseline is approved. Store it as `agile_requirements_confirmation`; there is no
-second implicit completeness gate. Only then advance directly to code planning.
+stage. Ask the user only when material clarification questions exist. After the READY artifact is
+presented, one explicit approval of the current PRD is sufficient to advance directly to code
+planning. Approval of a READY PRD means the user accepts the document with no remaining
+clarification request; do not require separate or specially worded confirmation that
+clarification is complete. Store that approval effect in `agile_requirements_confirmation` for
+audit compatibility.
 
 ### Technical design
 
