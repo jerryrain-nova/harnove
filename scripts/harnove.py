@@ -15,6 +15,10 @@ import uuid
 from pathlib import Path
 
 STAGES = ["prd_intake", "technical_design", "code_plan", "test_design", "implementation", "test_execution", "summary"]
+WORKFLOW_SEQUENCES = {
+    "expert": STAGES,
+    "agile": ["prd_intake", "code_plan", "implementation", "summary"],
+}
 GATED = {"technical_design", "code_plan", "test_design"}
 REVIEW_GATED = GATED | {"prd_intake"}
 VERSIONED_DOCUMENT_STAGES = REVIEW_GATED
@@ -25,6 +29,7 @@ DEFAULT_STAGE_TIMEOUT_MINUTES = {
 }
 NON_SIMPLE_TIMEOUT_MULTIPLIER = 1.5
 COMBINED_TEST_SECTIONS = ["测试总览", "测试方案", "覆盖策略", "测试用例", "测试目的", "覆盖矩阵"]
+AGILE_SUMMARY_SECTIONS = ["代码改动点"]
 DIRS = {
     "prd_intake": "00-input",
     "technical_design": "01-technical-design",
@@ -171,6 +176,13 @@ def safe_name(value: str) -> str:
     return value.strip("-._") or "requirement"
 
 
+def workflow_stages(state: dict) -> list[str]:
+    mode = state.get("workflow_mode", "expert")
+    if mode not in WORKFLOW_SEQUENCES:
+        raise SystemExit(f"不支持的工作流模式: {mode}")
+    return WORKFLOW_SEQUENCES[mode]
+
+
 def inside(path: Path, parent: Path) -> bool:
     try:
         path.resolve().relative_to(parent.resolve())
@@ -215,7 +227,7 @@ def load(archive: Path) -> dict:
     if not path.is_file():
         raise SystemExit(f"找不到状态文件: {path}")
     state = json.loads(path.read_text(encoding="utf-8"))
-    if state.get("schema_version", 1) < 11:
+    if state.get("schema_version", 1) < 12:
         _, _, discovered_improve, discovered_structure, discovered_custom, discovered_home, discovered_branch_pattern = project_defaults()
         inferred_home = archive.parent.parent.resolve()
         migration_home = Path(discovered_home) if inside(archive, Path(discovered_home)) else inferred_home
@@ -248,6 +260,8 @@ def load(archive: Path) -> dict:
             state.setdefault("initial_implementation_branch", state["implementation_branch"])
         state.setdefault("repair_branch_decisions", [])
         state.setdefault("design_mode", "separate")
+        state.setdefault("workflow_mode", "expert")
+        state.setdefault("agile_requirements_confirmation", None)
         if state.get("stage") in {"structure_analysis", "structure_refresh"}:
             if state.get("status") == "subagent_working":
                 raise SystemExit("旧迭代正停留在已移除的 structure 阶段；请用原版本结束该子 Agent 后再升级")
@@ -257,15 +271,20 @@ def load(archive: Path) -> dict:
             state["status"] = "awaiting_dispatch"
         if not state.get("timeout_profile"):
             refresh_timeout_profile(state)
-        state.setdefault("history", []).append({"at": now(), "action": "schema_migration", "from": old_schema, "to": 11})
+        state.setdefault("history", []).append({"at": now(), "action": "schema_migration", "from": old_schema, "to": 12})
         if state.get("status") == "drafting":
             state["status"] = "awaiting_dispatch"
-        state["schema_version"] = 11
+        state["schema_version"] = 12
         if not state.get("improvement_index") and (archive / "00-input").is_dir():
             state["improvement_index"] = create_improvement_context(archive, state)
         if not state.get("custom_index") and (archive / "00-input").is_dir():
             state["custom_index"] = create_custom_context(archive, state)
         save(archive, state)
+    sequence = workflow_stages(state)
+    if state.get("stage") not in sequence:
+        raise SystemExit(
+            f"{state.get('workflow_mode')} 模式不允许阶段 {state.get('stage')}；拒绝跨模式推进"
+        )
     return state
 
 
@@ -328,6 +347,7 @@ def prd_template(state: dict, source_summary: str, version: int) -> str:
 
 - 文档版本：v{version:03d}
 - 迭代名称：{state['iteration_name']}
+- 工作流模式：`{state.get('workflow_mode', 'expert').upper()}`
 - 输入类型：{state['prd_source_type']}
 - 原始输入：`{state['original_input_snapshot']}`
 - 原始输入 SHA-256：`{state['original_input_sha256']}`
@@ -403,6 +423,7 @@ def template(state: dict, stage: str, version: int) -> str:
     lines = [
         f"# {state['iteration_id']} {state['requirement']} - {CN_NAMES[stage]}", "",
         f"- 迭代编号：{state['iteration_id']}", f"- 迭代名称：{state['iteration_name']}", f"- 需求名称：{state['requirement']}",
+        f"- 工作流模式：`{state.get('workflow_mode', 'expert').upper()}`",
         f"- 文档版本：v{version:03d}", f"- 角色：{CN_NAMES[stage]}", "- 状态：草稿",
         f"- PRD 快照：`00-input/{state['prd_snapshot']}`", f"- PRD SHA-256：`{state['prd_sha256']}`",
         f"- 经验复用索引：`00-input/{state['improvement_index']}`",
@@ -412,12 +433,18 @@ def template(state: dict, stage: str, version: int) -> str:
     if stage in {"technical_design", "code_plan"}:
         lines += ["- 表达格式：`PRESENTATION_FORMAT: MD`", ""]
     if stage == "code_plan":
-        lines += [
-            "- 设计模式：`DESIGN_MODE: UNDECIDED`",
-            "- 改动规模：`CHANGE_SCOPE: UNDECIDED`",
-            "",
-        ]
-    for section in REQUIRED_SECTIONS[stage]:
+        if state.get("workflow_mode", "expert") == "agile":
+            lines += ["- 设计模式：`DESIGN_MODE: AGILE`", "- 改动规模：`CHANGE_SCOPE: AGILE`", ""]
+        else:
+            lines += [
+                "- 设计模式：`DESIGN_MODE: UNDECIDED`",
+                "- 改动规模：`CHANGE_SCOPE: UNDECIDED`",
+                "",
+            ]
+    template_sections = list(REQUIRED_SECTIONS[stage])
+    if stage == "summary" and state.get("workflow_mode") == "agile":
+        template_sections += AGILE_SUMMARY_SECTIONS
+    for section in template_sections:
         initial = PLACEHOLDER
         if section == "版本核心差异" and version == 1:
             initial = "首版文档，无上一版本；本节用于后续版本概括核心变化。"
@@ -431,13 +458,25 @@ def template(state: dict, stage: str, version: int) -> str:
             lines += [f"FEEDBACK_EXPERIENCE_STATUS: {status}", ""]
         if section == "项目结构抽象":
             lines += ["STRUCTURE_STATUS: UPDATED", "", "总结阶段必须依据完成后的实时代码更新 structure/，覆盖功能模块、代码框架、结构定义和关系，并引用代码证据。", ""]
+        if (
+            stage == "summary" and state.get("workflow_mode") == "agile"
+            and section == "测试结论"
+        ):
+            lines += [
+                "AGILE_TEST_STATUS: NOT_RUN", "",
+                "敏捷模式未包含独立测试方案或测试执行阶段；不得声称测试已通过。", "",
+            ]
     return "\n".join(lines)
 
 
-def required_sections_for(stage: str, text: str = "") -> list[str]:
+def required_sections_for(stage: str, text: str = "", state: dict | None = None) -> list[str]:
     sections = list(REQUIRED_SECTIONS[stage])
     if stage == "code_plan" and "DESIGN_MODE: COMBINED" in text:
         sections.extend(section for section in COMBINED_TEST_SECTIONS if section not in sections)
+    if stage == "summary" and (
+        (state or {}).get("workflow_mode") == "agile" or "工作流模式：`AGILE`" in text
+    ):
+        sections.extend(section for section in AGILE_SUMMARY_SECTIONS if section not in sections)
     return sections
 
 
@@ -445,7 +484,7 @@ def validate_artifact(path: Path, stage: str, state: dict | None = None, last_ru
     if not path.is_file():
         return [f"缺少产物: {path}"]
     text = path.read_text(encoding="utf-8")
-    required_sections = required_sections_for(stage, text)
+    required_sections = required_sections_for(stage, text, state)
     errors = [f"缺少章节: {s}" for s in required_sections if f"## {s}" not in text]
     positions = [text.find(f"## {section}") for section in required_sections]
     if all(position >= 0 for position in positions) and positions != sorted(positions):
@@ -454,6 +493,8 @@ def validate_artifact(path: Path, stage: str, state: dict | None = None, last_ru
         errors.append("未引用任何稳定需求 ID（REQ-xxx）")
     if state is not None and state.get("iteration_name") not in text:
         errors.append("产物缺少用户确认的迭代名称")
+    if state is not None and f"工作流模式：`{state.get('workflow_mode', 'expert').upper()}`" not in text:
+        errors.append("产物缺少当前工作流模式标记")
     if "<!--" in text:
         errors.append("仍存在未填写的模板占位符")
     if len(text.strip()) < 500:
@@ -524,28 +565,34 @@ def validate_artifact(path: Path, stage: str, state: dict | None = None, last_ru
             if not reason or len(reason.group(1).strip()) < 20:
                 errors.append("NOT_APPLICABLE 必须给出至少 20 字的具体理由")
     if stage == "code_plan":
+        workflow_mode = (state or {}).get("workflow_mode", "expert")
         combined = "DESIGN_MODE: COMBINED" in text
         separate = "DESIGN_MODE: SEPARATE" in text
+        agile = "DESIGN_MODE: AGILE" in text
         small = "CHANGE_SCOPE: SMALL" in text
         regular = "CHANGE_SCOPE: REGULAR" in text
-        if combined == separate:
-            errors.append("代码方案必须且只能声明 DESIGN_MODE: COMBINED 或 SEPARATE")
-        if small == regular:
-            errors.append("代码方案必须且只能声明 CHANGE_SCOPE: SMALL 或 REGULAR")
         scale = section_text(text, "改动规模判断")
         files = re.search(r"AFFECTED_FILES\s*:\s*(\d+)", scale)
         modules = re.search(r"AFFECTED_MODULES\s*:\s*(\d+)", scale)
         cross_boundary = re.search(r"CROSS_BOUNDARY_CHANGE\s*:\s*(YES|NO)", scale)
         if not files or not modules or not cross_boundary:
             errors.append("改动规模判断必须记录 AFFECTED_FILES、AFFECTED_MODULES 和 CROSS_BOUNDARY_CHANGE")
-        elif combined and (
-            not small or int(files.group(1)) > 3 or int(modules.group(1)) > 1 or cross_boundary.group(1) != "NO"
-        ):
-            errors.append("合并设计只适用于最多 3 个文件、1 个模块且无跨边界变更的小范围改动")
-        elif separate and small:
-            errors.append("CHANGE_SCOPE: SMALL 时必须合并代码方案与测试方案")
-        if combined and len(section_text(text, "测试方案")) < 60:
-            errors.append("合并设计中的测试方案过短，必须说明测试边界、执行方式和失败处理")
+        if workflow_mode == "agile":
+            if not agile or combined or separate or "CHANGE_SCOPE: AGILE" not in text:
+                errors.append("敏捷模式代码方案必须声明 DESIGN_MODE: AGILE 和 CHANGE_SCOPE: AGILE")
+        else:
+            if agile or combined == separate:
+                errors.append("专家模式代码方案必须且只能声明 DESIGN_MODE: COMBINED 或 SEPARATE")
+            if small == regular:
+                errors.append("专家模式代码方案必须且只能声明 CHANGE_SCOPE: SMALL 或 REGULAR")
+            if files and modules and cross_boundary and combined and (
+                not small or int(files.group(1)) > 3 or int(modules.group(1)) > 1 or cross_boundary.group(1) != "NO"
+            ):
+                errors.append("合并设计只适用于最多 3 个文件、1 个模块且无跨边界变更的小范围改动")
+            elif separate and small:
+                errors.append("CHANGE_SCOPE: SMALL 时必须合并代码方案与测试方案")
+            if combined and len(section_text(text, "测试方案")) < 60:
+                errors.append("合并设计中的测试方案过短，必须说明测试边界、执行方式和失败处理")
     if stage == "summary" and state is not None:
         current = structure_hashes(Path(state["structure_root"]))
         before = (last_run or {}).get("structure_before", {})
@@ -574,6 +621,11 @@ def validate_artifact(path: Path, stage: str, state: dict | None = None, last_ru
                 errors.append("用户反馈经验过短，必须提炼具体、可复用的执行规则")
         elif not feedback and not none:
             errors.append("本次无用户反馈时必须声明 FEEDBACK_EXPERIENCE_STATUS: NONE")
+        if state.get("workflow_mode") == "agile":
+            if "AGILE_TEST_STATUS: NOT_RUN" not in section_text(text, "测试结论"):
+                errors.append("敏捷模式总结必须声明 AGILE_TEST_STATUS: NOT_RUN，不得虚构测试通过")
+            if len(section_text(text, "代码改动点")) < 60:
+                errors.append("敏捷模式总结必须向用户归纳实际文件、符号、行为变化和方案偏差")
     return errors
 
 
@@ -596,7 +648,8 @@ def create_requirement_baseline(archive: Path, state: dict) -> None:
 
 
 def advance(state: dict) -> None:
-    state["stage"] = STAGES[STAGES.index(state["stage"]) + 1]
+    sequence = workflow_stages(state)
+    state["stage"] = sequence[sequence.index(state["stage"]) + 1]
     state["version"] = state["stage_versions"].get(state["stage"], 0) + 1
     state["stage_versions"][state["stage"]] = state["version"]
     state["status"] = "awaiting_dispatch"
@@ -729,6 +782,9 @@ def cmd_init(a: argparse.Namespace) -> None:
         raise SystemExit("自然语言描述不能为空")
 
     ident, iteration_name, req = safe_name(a.iteration_id), safe_name(a.iteration_name), safe_name(a.requirement)
+    workflow_mode = getattr(a, "mode", "expert")
+    if workflow_mode not in WORKFLOW_SEQUENCES:
+        raise SystemExit("工作流模式必须是 expert 或 agile")
     archive = root / f"{dt.date.today():%Y%m%d}_{ident}_{iteration_name}"
     if archive.exists():
         raise SystemExit(f"归档目录已存在: {archive}")
@@ -736,7 +792,8 @@ def cmd_init(a: argparse.Namespace) -> None:
         (archive / folder).mkdir(parents=True, exist_ok=True)
     baseline = git(repo, "rev-parse", "HEAD")
     state = {
-        "schema_version": 11, "iteration_id": ident, "iteration_name": iteration_name, "requirement": req,
+        "schema_version": 12, "iteration_id": ident, "iteration_name": iteration_name, "requirement": req,
+        "workflow_mode": workflow_mode,
         "default_branch_pattern": getattr(a, "branch_pattern", "tmp/{iteration_name}-{implementation_version}"),
         "archive": str(archive), "repo": str(repo), "harnove_home": str(home),
         "improve_root": str(improve_root), "structure_root": str(structure_root), "custom_root": str(custom_root), "git_baseline": baseline,
@@ -744,6 +801,7 @@ def cmd_init(a: argparse.Namespace) -> None:
         "stage_versions": {stage: 0 for stage in STAGES}, "used_agent_ids": [],
         "implementation_branch": None, "initial_implementation_branch": None, "repair_branch_decisions": [],
         "design_mode": "separate",
+        "agile_requirements_confirmation": None,
     }
     structure_root.mkdir(parents=True, exist_ok=True)
     state["timeout_profile"] = build_timeout_profile(home, structure_root)
@@ -751,6 +809,9 @@ def cmd_init(a: argparse.Namespace) -> None:
         "at": now(), "action": "project_scale_assessment",
         **state["timeout_profile"]["project_scale"],
         "stage_timeout_minutes": state["timeout_profile"]["stage_minutes"],
+    })
+    state["history"].append({
+        "at": now(), "action": "workflow_mode_selected", "mode": workflow_mode,
     })
     state["improvement_index"] = create_improvement_context(archive, state)
     state["custom_index"] = create_custom_context(archive, state)
@@ -804,6 +865,11 @@ def cmd_dispatch(a: argparse.Namespace) -> None:
         raise SystemExit("已有子 Agent 租约，拒绝并发派发")
     run_id = uuid.uuid4().hex
     stage, version = state["stage"], state["version"]
+    if (
+        state.get("workflow_mode") == "agile" and stage == "code_plan"
+        and not state.get("agile_requirements_confirmation")
+    ):
+        raise SystemExit("敏捷模式进入代码方案前，必须归档用户对澄清完毕及完整需求基线的明确批准")
     refresh_timeout_profile(state)
     timeout_minutes = state["timeout_profile"]["stage_minutes"][stage]
     expires_at = (
@@ -915,6 +981,8 @@ def cmd_dispatch(a: argparse.Namespace) -> None:
     work_order = {
         "run_id": run_id, "agent_id": a.agent_id, "orchestrator": a.orchestrator,
         "stage": stage, "version": version, "created_at": now(),
+        "workflow_mode": state.get("workflow_mode", "expert"),
+        "workflow_sequence": workflow_stages(state),
         "timeout_minutes": timeout_minutes, "expires_at": expires_at,
         "timeout_profile": state["timeout_profile"],
         "artifact": str(artifact_path(archive, state)), "repo": state["repo"],
@@ -950,19 +1018,36 @@ def cmd_dispatch(a: argparse.Namespace) -> None:
             "不得执行其他环节的工作，不得复用本次子 Agent 身份",
         ],
     }
+    if state.get("workflow_mode") == "agile":
+        work_order["rules"].append(
+            "敏捷模式只执行需求澄清、代码方案、代码实现和总结；不得补做技术方案、测试方案或测试执行"
+        )
+        if stage == "code_plan":
+            work_order["rules"].append("代码方案阶段只设计改动，不得修改实际代码")
+        if stage == "summary":
+            work_order["rules"].append(
+                "总结必须明确敏捷模式未包含独立测试阶段，并在代码改动点章节向用户归纳实际文件、符号和行为变化"
+            )
     if stage == "code_plan":
-        work_order["code_plan_mode_contract"] = {
-            "small_change_limits": {
-                "maximum_affected_files": 3, "maximum_affected_modules": 1,
-                "cross_boundary_change": "NO",
-                "forbidden_characteristics": [
-                    "public_contract_change", "data_schema_change", "migration", "cross_boundary_change",
-                ],
-            },
-            "combined_markers": ["CHANGE_SCOPE: SMALL", "DESIGN_MODE: COMBINED"],
-            "separate_markers": ["CHANGE_SCOPE: REGULAR", "DESIGN_MODE: SEPARATE"],
-            "required_combined_sections": COMBINED_TEST_SECTIONS,
-        }
+        if state.get("workflow_mode") == "agile":
+            work_order["code_plan_mode_contract"] = {
+                "mode": "agile", "markers": ["CHANGE_SCOPE: AGILE", "DESIGN_MODE: AGILE"],
+                "artifact_only": True, "next_stage_after_human_approval": "implementation",
+            }
+        else:
+            work_order["code_plan_mode_contract"] = {
+                "mode": "expert",
+                "small_change_limits": {
+                    "maximum_affected_files": 3, "maximum_affected_modules": 1,
+                    "cross_boundary_change": "NO",
+                    "forbidden_characteristics": [
+                        "public_contract_change", "data_schema_change", "migration", "cross_boundary_change",
+                    ],
+                },
+                "combined_markers": ["CHANGE_SCOPE: SMALL", "DESIGN_MODE: COMBINED"],
+                "separate_markers": ["CHANGE_SCOPE: REGULAR", "DESIGN_MODE: SEPARATE"],
+                "required_combined_sections": COMBINED_TEST_SECTIONS,
+            }
     if branch_record:
         work_order["implementation_branch"] = branch_record
     runs = archive / "agent-runs"
@@ -1061,8 +1146,9 @@ def cmd_abandon(a: argparse.Namespace) -> None:
 def cmd_status(a: argparse.Namespace) -> None:
     archive, state = Path(a.archive).resolve(), load(Path(a.archive).resolve())
     keys = [
-        "iteration_id", "iteration_name", "requirement", "prd_source_type", "stage", "version",
-        "status", "test_cycles", "design_mode", "timeout_profile", "implementation_branch",
+        "iteration_id", "iteration_name", "requirement", "workflow_mode", "prd_source_type", "stage", "version",
+        "status", "test_cycles", "design_mode", "agile_requirements_confirmation",
+        "timeout_profile", "implementation_branch",
         "delivery_branch", "pending_repair_branch_decision", "active_agent",
     ]
     payload = {k: state.get(k) for k in keys}
@@ -1142,7 +1228,11 @@ def submit_prd_intake(archive: Path, state: dict, path: Path, result: str | None
     if result not in {"needs-clarification", "ready"}:
         raise SystemExit("候选 PRD 提交必须提供 --result needs-clarification|ready")
     text = path.read_text(encoding="utf-8")
-    event = {"at": now(), "action": "submit", "stage": "prd_intake", "version": state["version"], "result": result, "artifact": str(path.relative_to(archive)), "sha256": digest(path)}
+    event = {
+        "at": now(), "action": "submit", "workflow_mode": state.get("workflow_mode", "expert"),
+        "stage": "prd_intake", "version": state["version"], "result": result,
+        "artifact": str(path.relative_to(archive)), "sha256": digest(path),
+    }
     state["history"].append(event)
     if result == "needs-clarification":
         if "PRD_STATUS: NEEDS_CLARIFICATION" not in text:
@@ -1160,7 +1250,8 @@ def submit_prd_intake(archive: Path, state: dict, path: Path, result: str | None
         state["prd_candidate"] = path.name
         state["prd_candidate_sha256"] = digest(path)
         state["status"] = "awaiting_prd_review"
-        print("候选 PRD 已就绪。必须由用户执行 review approve|reject；未经批准不能进入技术设计。")
+        next_stage = "代码方案" if state.get("workflow_mode") == "agile" else "技术设计"
+        print(f"候选 PRD 已就绪。必须由用户执行 review approve|reject；未经批准不能进入{next_stage}。")
 
 
 def cmd_submit(a: argparse.Namespace) -> None:
@@ -1191,12 +1282,22 @@ def cmd_submit(a: argparse.Namespace) -> None:
         save(archive, state)
         cmd_status(argparse.Namespace(archive=str(archive)))
         return
-    event = {"at": now(), "action": "submit", "stage": stage, "version": state["version"], "artifact": str(path.relative_to(archive)), "sha256": digest(path)}
+    event = {
+        "at": now(), "action": "submit", "workflow_mode": state.get("workflow_mode", "expert"),
+        "stage": stage, "version": state["version"],
+        "artifact": str(path.relative_to(archive)), "sha256": digest(path),
+    }
     if stage == "code_plan":
         text = path.read_text(encoding="utf-8")
-        state["design_mode"] = "combined" if "DESIGN_MODE: COMBINED" in text else "separate"
+        state["design_mode"] = (
+            "agile" if state.get("workflow_mode") == "agile"
+            else "combined" if "DESIGN_MODE: COMBINED" in text else "separate"
+        )
         event["design_mode"] = state["design_mode"]
-        event["change_scope"] = "small" if "CHANGE_SCOPE: SMALL" in text else "regular"
+        event["change_scope"] = (
+            "agile" if state["design_mode"] == "agile"
+            else "small" if "CHANGE_SCOPE: SMALL" in text else "regular"
+        )
     if stage in {"technical_design", "code_plan"} and "PRESENTATION_FORMAT: HTML" in path.read_text(encoding="utf-8"):
         html = path.with_suffix(".html")
         event["html_sidecar"] = {"artifact": str(html.relative_to(archive)), "sha256": digest(html)}
@@ -1248,6 +1349,9 @@ def cmd_submit(a: argparse.Namespace) -> None:
             state["custom_experience_record"] = event["custom_experience"]
             state["custom_index"] = create_custom_context(archive, state, "completed")
         state["status"], state["completed_at"] = "complete", now()
+    elif stage == "implementation" and state.get("workflow_mode") == "agile":
+        state["delivery_branch"] = state.get("implementation_branch")
+        advance(state)
     else:
         advance(state)
     if state["status"] == "awaiting_dispatch":
@@ -1346,7 +1450,8 @@ def cmd_review(a: argparse.Namespace) -> None:
         raise SystemExit("驳回不能同时提供 --human-confirmation")
     stage, version, path = state["stage"], state["version"], artifact_path(archive, state)
     record = {
-        "at": now(), "reviewer": reviewer, "decision": a.decision, "stage": stage,
+        "at": now(), "reviewer": reviewer, "decision": a.decision,
+        "workflow_mode": state.get("workflow_mode", "expert"), "stage": stage,
         "version": version, "artifact": str(path.relative_to(archive)), "sha256": digest(path),
         "feedback": a.feedback.strip(), "human_confirmation": human_confirmation,
     }
@@ -1359,6 +1464,7 @@ def cmd_review(a: argparse.Namespace) -> None:
     if a.decision == "approve":
         approval = {
             "version": version, "artifact": str(path.relative_to(archive)), "sha256": digest(path),
+            "workflow_mode": state.get("workflow_mode", "expert"),
             "reviewer": reviewer, "human_confirmation": human_confirmation,
             "review_record": str(review_path.relative_to(archive)),
         }
@@ -1369,8 +1475,18 @@ def cmd_review(a: argparse.Namespace) -> None:
             state["prd_snapshot"] = path.name
             state["prd_sha256"] = digest(path)
             create_requirement_baseline(archive, state)
+            if state.get("workflow_mode") == "agile":
+                state["agile_requirements_confirmation"] = {
+                    "version": version, "artifact": str(path.relative_to(archive)),
+                    "sha256": digest(path), "reviewer": reviewer,
+                    "human_confirmation": human_confirmation,
+                    "review_record": str(review_path.relative_to(archive)),
+                }
         state.pop("approved_change_preview", None)
-        if stage == "code_plan" and state.get("design_mode") == "combined":
+        if (
+            stage == "code_plan" and state.get("workflow_mode", "expert") == "expert"
+            and state.get("design_mode") == "combined"
+        ):
             state["approved"]["test_design"] = {
                 **approval, "combined_with": "code_plan",
                 "artifact_role": "代码方案与测试方案合并文档",
@@ -1418,7 +1534,7 @@ def cmd_change_preview(a: argparse.Namespace) -> None:
     if not sections:
         raise SystemExit("必须通过 --sections 列出将发生变化的文档部分")
     reviewed_text = artifact_path(archive, state).read_text(encoding="utf-8")
-    allowed_sections = required_sections_for(state["stage"], reviewed_text)
+    allowed_sections = required_sections_for(state["stage"], reviewed_text, state)
     unknown_sections = [item for item in sections if item not in allowed_sections]
     if unknown_sections:
         raise SystemExit("变更影响包含不存在的文档章节: " + ", ".join(unknown_sections))
@@ -1496,6 +1612,7 @@ def parser() -> argparse.ArgumentParser:
     default_repo, default_archive, default_improve, default_structure, default_custom, default_home, default_branch_pattern = project_defaults()
     x = sub.add_parser("init")
     x.add_argument("--iteration-id", required=True); x.add_argument("--iteration-name", required=True); x.add_argument("--requirement", required=True)
+    x.add_argument("--mode", choices=["expert", "agile"], default="expert", help="expert=完整专家流程；agile=需求澄清、代码方案、实现、总结")
     source = x.add_mutually_exclusive_group(required=True)
     source.add_argument("--prd"); source.add_argument("--description"); source.add_argument("--description-file")
     x.add_argument("--repo", default=default_repo); x.add_argument("--root", default=default_archive)

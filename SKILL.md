@@ -1,6 +1,6 @@
 ---
 name: harnove
-description: Orchestrate a Harnove software iteration from an existing PRD or natural-language requirement using a user-confirmed iteration name, fresh isolated subagents, live repository inspection, implementation branches, mandatory human gates, visual artifacts, Harnove-local archives, post-completion structure abstraction, and reusable experience.
+description: Orchestrate expert or agile Harnove software iterations from an existing PRD or natural-language requirement using a user-confirmed mode and iteration name, fresh isolated subagents, live repository inspection, implementation branches, mandatory human gates, Harnove-local archives, post-completion structure abstraction, and reusable experience.
 ---
 
 # Orchestrate a Harnove iteration
@@ -11,12 +11,15 @@ Locate the nearest Harnove `config.json`; treat its parent as `HARNOVE_HOME`. Us
 `custom/`, and `timeout-policy.json` under
 `HARNOVE_HOME`; never create them at the product repository root.
 
-## Confirm the iteration name before initialization
+## Confirm mode and iteration name before initialization
 
 Read the requirement input and propose one concise, branch-safe iteration name that expresses
-the business change. Ask the user to confirm the suggestion or provide a replacement. Do not
-run `init` until the user explicitly supplies or accepts the name. Pass the confirmed value
-through `--iteration-name`; never silently derive or substitute it.
+the business change. Ask the user to choose `expert` (专家模式) or `agile` (敏捷模式), and to
+confirm the suggestion or provide a replacement. Explain briefly that expert mode keeps the full
+design-and-test workflow while agile mode keeps requirements, code planning, implementation,
+and summary. Do not run `init` until the user explicitly supplies or accepts both. Pass them
+through `--iteration-name` and `--mode`; never silently substitute them. Existing callers that
+omit `--mode` remain in `expert` for compatibility.
 
 ## Keep the main Agent orchestration-only
 
@@ -63,7 +66,9 @@ version. When boundaries are sufficient, submit `ready`, stop at `awaiting_prd_r
 obtain an explicit human `review`. Approval freezes the candidate PRD and advances the workflow.
 Feedback enters the document-change preview loop below; it does not create a version or child yet.
 
-## Execute isolated stages
+## Execute expert-mode stages
+
+In `workflow_mode=expert`, retain the complete existing workflow:
 
 - `technical_design`: inspect the current repository directly and document file/symbol evidence,
   architecture, flows, constraints, risks, rollout, rollback, traceability, and relevant
@@ -90,7 +95,7 @@ Feedback enters the document-change preview loop below; it does not create a ver
   reusable experience, and summarize rules learned from user feedback. Structure abstraction
   happens only here.
 
-Candidate PRD (the product/requirements plan), technical design, code plan, and test design
+Candidate PRDs and code plans in both modes, plus technical and test designs in expert mode,
 require real human approval. After submitting any of these artifacts, present the complete
 artifact to the user and stop. Passing validators, subagent completion, silence, lack of
 feedback, or the main Agent's quality judgment never counts as approval. Only after the user
@@ -107,6 +112,37 @@ Present the complete combined artifact for one explicit human review. Approval f
 path/hash for both roles and advances directly to implementation; it does not create or dispatch
 a separate `test_design` child. Rejection uses the normal document-change preview loop and must
 cover any affected code or test sections.
+
+## Execute agile mode independently
+
+In `workflow_mode=agile`, use exactly:
+
+`prd_intake → code_plan → implementation → summary`
+
+Do not create, dispatch, or infer `technical_design`, `test_design`, or `test_execution`.
+Continue to use a fresh child for every stage/version and enforce all custom context, timeout,
+lease, review, live-code, branch, and archive rules.
+
+- `prd_intake`: accept natural language or a PRD, clarify every material boundary and ambiguity,
+  and ask the user whether clarification is complete. Submit a ready candidate only when the
+  user-controlled boundaries are explicit. Present the complete READY requirement baseline and
+  ask for one explicit approval whose wording confirms both that all boundaries/ambiguities are
+  resolved and that the current complete baseline is approved. Archive that confirmation before
+  code planning; do not create a separate implicit completeness gate.
+- `code_plan`: inspect the live repository and produce the same file/module/symbol-level code
+  change plan quality as expert code planning. Set `DESIGN_MODE: AGILE` and
+  `CHANGE_SCOPE: AGILE`. This child designs only; it must not modify product code. Present the
+  complete plan and require explicit human approval.
+- `implementation`: after plan approval, reuse the exact expert implementation dispatch,
+  branch creation/switching, approved scope, Git evidence, and deviation rules.
+- `summary`: run immediately after implementation submission, without creating a test stage.
+  Reconcile actual code evidence, state explicitly that agile mode has no independent test
+  execution, update `structure/`, write `improve/` and custom experience, and include
+  `代码改动点` summarizing actual files, symbols, behavior changes, and deviations for the user.
+
+Agile document feedback uses the same preview-before-regeneration loop. Approval of a change
+preview only creates the next document version; it never approves that new version. Expert-only
+combined code/test design, test repair, and test execution rules must never affect agile state.
 
 ## Adapt subagent leases to project scale and timeouts
 
@@ -126,9 +162,10 @@ new profile to the retry and later iterations. The first timeout adds 50%, the s
 and the third and every later timeout add 10%. Do not mark crashes, ordinary failures, or manual
 cancellations as timeouts.
 
-## Ask how to branch for every test repair
+## Ask how to branch for every expert-mode test repair
 
-After a failed test submission, stop at `awaiting_repair_branch_decision`. Tell the user the
+This section never applies to agile mode. After an expert-mode failed test submission, stop at
+`awaiting_repair_branch_decision`. Tell the user the
 current implementation branch and the suggested default new-branch name, then ask whether to
 repair on the current branch or create a new repair branch.
 Never choose on the user's behalf and never dispatch the repair child before the decision.
@@ -147,7 +184,8 @@ If another test cycle fails, ask the same question again.
 
 ## Preview feedback impact before revising documents
 
-Apply this loop to candidate PRDs, technical designs, code plans, and test designs:
+Apply this loop to every reviewed document present in the selected mode: candidate PRDs and code
+plans in both modes, plus technical and test designs in expert mode:
 
 1. Treat any requested document change at a review gate as rejection of the current version unless
    the user explicitly approves it unchanged. Run `review --decision reject ...`. Stop;
@@ -167,7 +205,7 @@ the stage artifact itself. Never dispatch while status is `awaiting_change_previ
 
 ## Put decisions before details
 
-Candidate PRDs, technical designs, code plans, and test designs begin with their required
+Candidate PRDs and code plans in both modes, plus expert technical and test designs, begin with their required
 overview and `版本核心差异`. Version v002 and later must add `版本演进摘要` immediately afterward;
 never retrofit this section into an earlier artifact. Keep the overview decision-oriented: goal, scope, key decision, and
 acceptance or risk focus. Put supporting analysis, tables, and detailed rules afterward. For

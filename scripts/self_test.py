@@ -20,6 +20,7 @@ def ns_init(root: Path, iteration: str, requirement: str, **source: object) -> a
     return argparse.Namespace(
         root=str(root / "iterations"), improve_root=str(root / "improve"), structure_root=str(root / "structure"), custom_root=str(root / "custom"), home=str(root),
         repo=str(root), iteration_id=iteration, iteration_name=requirement, requirement=requirement,
+        mode=source.get("mode", "expert"),
         prd=source.get("prd"), description=source.get("description"),
         description_file=source.get("description_file"),
     )
@@ -56,7 +57,7 @@ def fill_current(archive: Path) -> None:
     structure_file = Path(state["structure_root"]) / "project-structure.md"
     if state["stage"] == "summary":
         structure_file.write_text(
-            "# 项目结构解读\n\n## 功能模块\n\n订单模块负责查询与导出。\n\n"
+            f"# 项目结构解读\n\n- 最近迭代：{state['iteration_id']}\n\n## 功能模块\n\n订单模块负责查询与导出。\n\n"
             "## 代码框架\n\n采用分层服务结构。\n\n## 结构定义和关系\n\n控制器调用服务，服务访问仓储。\n\n"
             "## 代码证据\n\n依据当前仓库中的 prd.md 与已完成迭代 Git diff 抽象。\n",
             encoding="utf-8",
@@ -64,12 +65,19 @@ def fill_current(archive: Path) -> None:
     if state["stage"] in {"technical_design", "code_plan"}:
         text += "\nDIAGRAM_STATUS: INCLUDED\n\n```mermaid\nflowchart LR\n  A[输入] --> B[处理]\n  B --> C[输出]\n```\n"
     if state["stage"] == "code_plan":
+        agile = state.get("workflow_mode") == "agile"
         text = text.replace("DESIGN_MODE: UNDECIDED", "DESIGN_MODE: SEPARATE")
         text = text.replace("CHANGE_SCOPE: UNDECIDED", "CHANGE_SCOPE: REGULAR")
         text = text.replace(
             "## 改动规模判断\n\n",
-            "## 改动规模判断\n\nAFFECTED_FILES: 5\nAFFECTED_MODULES: 2\n"
-            "CROSS_BOUNDARY_CHANGE: YES\n\n依据实时文件与符号检查，本次变更跨越多个模块，代码方案与测试方案保持独立审核。\n\n",
+            "## 改动规模判断\n\n"
+            + (
+                "AFFECTED_FILES: 2\nAFFECTED_MODULES: 1\nCROSS_BOUNDARY_CHANGE: NO\n\n"
+                "敏捷模式依据实时文件与符号检查记录范围，本阶段只输出代码改动方案，不修改实际代码。\n\n"
+                if agile else
+                "AFFECTED_FILES: 5\nAFFECTED_MODULES: 2\nCROSS_BOUNDARY_CHANGE: YES\n\n"
+                "依据实时文件与符号检查，本次变更跨越多个模块，代码方案与测试方案保持独立审核。\n\n"
+            ),
         )
     text += "\n" + ("REQ-001 的范围证据、实现约束与验证说明。" * 40) + "\n"
     path.write_text(text, encoding="utf-8")
@@ -200,7 +208,10 @@ def approve_document_change(archive: Path, feedback: str, revise_feedback: str =
     assert context["from_version"] == before["version"] and context["to_version"] == before["version"] + 1
 
 
-def write_intake_file(path: Path, status: str, questions: str, supplement: str, iteration_name: str, version: int) -> None:
+def write_intake_file(
+    path: Path, status: str, questions: str, supplement: str, iteration_name: str,
+    version: int, workflow_mode: str = "expert",
+) -> None:
     detail = "用户需要批量导出订单；所有未明确能力均不进入本次范围。" * 25
     difference = "首版候选文档，无上一版本；本版建立需求和验收基线。" if version == 1 else "相对上一版，本版落实已批准反馈，调整范围依据、权限约束与验收决策，同时保留其他已确认边界和不变项。"
     evolution = "\n".join(
@@ -213,6 +224,7 @@ def write_intake_file(path: Path, status: str, questions: str, supplement: str, 
 - 文档版本：v{version:03d}
 - 状态标记：`PRD_STATUS: {status}`
 - 迭代名称：{iteration_name}
+- 工作流模式：`{workflow_mode.upper()}`
 
 ## 文档总览
 
@@ -278,7 +290,10 @@ REQ-001：满足已确认格式和数量边界时生成可下载文件。
 def intake_writer(status: str, questions: str, supplement: str = "暂无。"):
     def write(archive: Path) -> None:
         state = harnove.load(archive)
-        write_intake_file(harnove.artifact_path(archive, state), status, questions, supplement, state["iteration_name"], state["version"])
+        write_intake_file(
+            harnove.artifact_path(archive, state), status, questions, supplement,
+            state["iteration_name"], state["version"], state.get("workflow_mode", "expert"),
+        )
     return write
 
 
@@ -573,6 +588,66 @@ def test_combined_code_and_test_design(root: Path) -> None:
     assert state["skipped_stages"][-1]["stage"] == "test_design"
 
 
+def test_agile_mode_is_independent(root: Path) -> None:
+    harnove.cmd_init(ns_init(
+        root, "SMOKE-005", "agile-flow", mode="agile",
+        description="在订单模块中调整两个文件的局部校验逻辑，但错误提示是否沿用现状尚未确认。",
+    ))
+    archive = next((root / "iterations").glob("*_SMOKE-005_agile-flow"))
+    state = harnove.load(archive)
+    assert state["workflow_mode"] == "agile"
+    assert harnove.workflow_stages(state) == ["prd_intake", "code_plan", "implementation", "summary"]
+    original_state = json.loads(json.dumps(state))
+    state["stage"] = "technical_design"
+    harnove.save(archive, state)
+    try:
+        harnove.load(archive)
+        raise AssertionError("agile state accepted an expert-only stage")
+    except SystemExit as exc:
+        assert "拒绝跨模式推进" in str(exc)
+    harnove.save(archive, original_state)
+
+    run_subagent(archive, intake_writer("NEEDS_CLARIFICATION", "1. 错误提示是否沿用当前系统文案？"))
+    harnove.cmd_submit(argparse.Namespace(archive=str(archive), result="needs-clarification"))
+    harnove.cmd_clarify(argparse.Namespace(
+        archive=str(archive), responder="product-owner",
+        response="沿用当前系统错误提示，不新增提示类型。", response_file=None,
+    ))
+    run_subagent(
+        archive,
+        intake_writer("READY", "无（边界已确认）", "用户确认：沿用当前系统错误提示。"),
+    )
+    harnove.cmd_submit(argparse.Namespace(archive=str(archive), result="ready"))
+    review(archive, "approve")
+    state = harnove.load(archive)
+    assert state["stage"] == "code_plan"
+    assert state["agile_requirements_confirmation"]["human_confirmation"] == "人工明确批准当前完整文档"
+    assert state["stage_versions"]["technical_design"] == 0
+
+    run_subagent(archive)
+    harnove.cmd_submit(argparse.Namespace(archive=str(archive), result=None))
+    assert harnove.load(archive)["design_mode"] == "agile"
+    approve_document_change(archive, "补充错误分支的具体代码改动点和不变边界")
+    run_subagent(archive)
+    harnove.cmd_submit(argparse.Namespace(archive=str(archive), result=None))
+    review(archive, "approve")
+    state = harnove.load(archive)
+    assert state["stage"] == "implementation" and state["status"] == "awaiting_dispatch"
+    assert set(state["approved"]) == {"prd_intake", "code_plan"}
+    assert state["stage_versions"]["test_design"] == 0
+
+    submit(archive)
+    state = harnove.load(archive)
+    assert state["stage"] == "summary"
+    assert state["stage_versions"]["test_execution"] == 0
+    assert state["delivery_branch"]["name"] == state["implementation_branch"]["name"]
+    submit(archive)
+    state = harnove.load(archive)
+    assert state["status"] == "complete" and state["test_cycles"] == 0
+    summary = harnove.artifact_path(archive, state)
+    assert "## 代码改动点" in summary.read_text(encoding="utf-8")
+
+
 def test_schema8_branch_migration(root: Path) -> None:
     archive = root / "schema8-migration"
     archive.mkdir()
@@ -587,7 +662,8 @@ def test_schema8_branch_migration(root: Path) -> None:
     }
     (archive / "state.json").write_text(json.dumps(state), encoding="utf-8")
     migrated = harnove.load(archive)
-    assert migrated["schema_version"] == 11
+    assert migrated["schema_version"] == 12
+    assert migrated["workflow_mode"] == "expert"
     assert migrated["initial_implementation_branch"]["name"] == "feature/original"
     assert migrated["implementation_branch"]["name"] == "feature/old-fix"
     assert migrated["repair_branch_decisions"] == []
@@ -595,7 +671,7 @@ def test_schema8_branch_migration(root: Path) -> None:
 
 def main() -> None:
     package = json.loads((Path(__file__).resolve().parent.parent / "harnove-package.json").read_text(encoding="utf-8"))
-    assert version_policy.expected(version_policy.parse("5.2.1"), "feature") == version_policy.parse(package["version"])
+    assert version_policy.expected(version_policy.parse("5.3.0"), "feature") == version_policy.parse(package["version"])
     assert [harnove.timeout_increase_rate(index) for index in range(1, 9)] == [
         0.5, 0.3, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1,
     ]
@@ -604,6 +680,7 @@ def main() -> None:
         improvement = test_existing_prd(root)
         test_natural_language_reuses_experience(root, improvement)
         test_combined_code_and_test_design(root)
+        test_agile_mode_is_independent(root)
         test_schema8_branch_migration(root)
     print("self-test passed")
 
