@@ -149,10 +149,15 @@ def submit(archive: Path, result: str | None = None, branch: str | None = None) 
     harnove.cmd_submit(argparse.Namespace(archive=str(archive), result=result))
 
 
-def review(archive: Path, decision: str, feedback: str = "") -> None:
+def review(
+    archive: Path, decision: str, feedback: str = "", human_confirmation: str | None = None,
+) -> None:
     harnove.cmd_review(argparse.Namespace(
         archive=str(archive), decision=decision, reviewer="smoke-human", feedback=feedback,
-        human_confirmation="人工明确批准当前完整文档" if decision == "approve" else "",
+        human_confirmation=(
+            human_confirmation if human_confirmation is not None
+            else "人工明确批准当前完整文档" if decision == "approve" else ""
+        ),
     ))
 
 
@@ -307,6 +312,10 @@ def test_existing_prd(root: Path) -> Path:
     archive = next((root / "iterations").glob("*_SMOKE-001_state-machine"))
     state = harnove.load(archive)
     assert state["status"] == "awaiting_dispatch"
+    assert {path.name for path in archive.iterdir() if path.is_dir()} == {
+        "00-input", "01-technical-design", "02-code-plan", "03-test-design",
+        "04-implementation", "05-test-execution", "06-summary", "reviews", "agent-runs",
+    }
     assert state["timeout_profile"]["project_scale"]["scale"] == "unknown"
     assert state["timeout_profile"]["stage_minutes"] == harnove.DEFAULT_STAGE_TIMEOUT_MINUTES
     assert (root / "custom" / "user.md").is_file()
@@ -597,6 +606,13 @@ def test_agile_mode_is_independent(root: Path) -> None:
     state = harnove.load(archive)
     assert state["workflow_mode"] == "agile"
     assert harnove.workflow_stages(state) == ["prd_intake", "code_plan", "implementation", "summary"]
+    assert {path.name for path in archive.iterdir() if path.is_dir()} == {
+        "00-input", "02-code-plan", "04-implementation", "06-summary", "reviews", "agent-runs",
+    }
+    assert (archive / "00-input" / "clarifications").is_dir()
+    assert not any((archive / folder).exists() for folder in [
+        "01-technical-design", "03-test-design", "05-test-execution",
+    ])
     original_state = json.loads(json.dumps(state))
     state["stage"] = "technical_design"
     harnove.save(archive, state)
@@ -618,10 +634,14 @@ def test_agile_mode_is_independent(root: Path) -> None:
         intake_writer("READY", "无（边界已确认）", "用户确认：沿用当前系统错误提示。"),
     )
     harnove.cmd_submit(argparse.Namespace(archive=str(archive), result="ready"))
-    review(archive, "approve")
+    review(archive, "approve", human_confirmation="批准当前PRD")
     state = harnove.load(archive)
     assert state["stage"] == "code_plan"
-    assert state["agile_requirements_confirmation"]["human_confirmation"] == "人工明确批准当前完整文档"
+    assert state["agile_requirements_confirmation"]["human_confirmation"] == "批准当前PRD"
+    assert state["agile_requirements_confirmation"]["no_pending_clarification"] is True
+    assert state["agile_requirements_confirmation"]["approval_effect"] == (
+        "approved_ready_prd_implies_no_pending_clarification"
+    )
     assert state["stage_versions"]["technical_design"] == 0
 
     run_subagent(archive)
