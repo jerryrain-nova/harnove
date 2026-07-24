@@ -8,6 +8,7 @@
     "architecture_change": "increment_major_a"
   },
   "core_files": [
+    "README.md",
     "harnove-package.json",
     "harnove.config.example.json",
     "init.py",
