@@ -196,6 +196,7 @@ def main() -> None:
     print(f"迭代归档: {archive_root}")
     print(f"经验沉淀: {improve_root}")
     print(f"项目结构知识: {structure_root}")
+    print(f"自适应超时策略: {install_root / 'timeout-policy.json'}（首次真实超时后创建）")
     print(f"项目自定义上下文: {custom_root}")
     print(f"使用文档: {install_root / 'USAGE.md'}")
     print("下一步: 先由 Agent 建议迭代名称并由用户确认。")

@@ -7,7 +7,8 @@ description: Orchestrate a Harnove software iteration from an existing PRD or na
 
 Locate the nearest Harnove `config.json`; treat its parent as `HARNOVE_HOME`. Use
 `HARNOVE_HOME/runtime/harnove.py` as the authoritative state machine and read
-`references/artifact-contracts.md` completely. Keep `iterations/`, `improve/`, `structure/`, and `custom/` under
+`references/artifact-contracts.md` completely. Keep `iterations/`, `improve/`, `structure/`,
+`custom/`, and `timeout-policy.json` under
 `HARNOVE_HOME`; never create them at the product repository root.
 
 ## Confirm the iteration name before initialization
@@ -35,10 +36,12 @@ For every `(stage, version)`:
    test-fix cycles. If the platform cannot create subagents, stop and report the limitation.
 5. Monitor the child. The child may work only within the work order, must read the frozen PRD,
    custom context and experience context, and must not call Harnove state
-   commands or approve a gate.
+   commands or approve a gate. Respect `timeout_minutes` and `expires_at`.
 6. On success, run `agent-complete ... --result succeeded --evidence <summary>`. On failure,
-   run it with `failed`; on timeout/crash use `abandon --reason <reason>`, then dispatch a new
-   child. A successful run changes status to `ready_for_submit`.
+   run it with `failed`. On a real timeout, use
+   `abandon --run-id <id> --reason <reason> --timed-out`; on a non-timeout crash omit
+   `--timed-out`. Then dispatch a new child. A successful run changes status to
+   `ready_for_submit`.
 7. Run `submit` as the orchestrator. Never bypass the run ID, lease, or agent evidence by
    editing `state.json`.
 
@@ -68,6 +71,11 @@ Feedback enters the document-change preview loop below; it does not create a ver
 - `code_plan`: specify file/module/symbol scope, exact rules, boundaries, rationale, risks,
   sequencing, prohibited changes, and traceability. Re-read the relevant current code before
   planning; never use `structure/` as an architecture input. Do not modify product code.
+  Record `AFFECTED_FILES`, `AFFECTED_MODULES`, and `CROSS_BOUNDARY_CHANGE`. If the change is
+  limited to at most three files in one module with no public-contract, data-schema,
+  migration, or cross-boundary change, set `CHANGE_SCOPE: SMALL` and
+  `DESIGN_MODE: COMBINED`, then include the complete test design in this same artifact.
+  Otherwise set `CHANGE_SCOPE: REGULAR` and `DESIGN_MODE: SEPARATE`.
 - `test_design`: cover every requirement and planned change with purpose, preconditions,
   steps, expected result, type, priority, and edge/failure behavior. Do not modify code.
 - `implementation`: start only after `dispatch` creates and switches to a new branch. Use the
@@ -93,6 +101,30 @@ explicitly approves the complete current version may the main Agent run:
 Preserve the user's approval wording exactly; never invent, infer, or paraphrase it. Do not
 dispatch the next stage until this command has recorded the approval and the state machine has
 advanced.
+
+For `DESIGN_MODE: COMBINED`, the one artifact is both the code-plan and test-design baseline.
+Present the complete combined artifact for one explicit human review. Approval freezes the same
+path/hash for both roles and advances directly to implementation; it does not create or dispatch
+a separate `test_design` child. Rejection uses the normal document-change preview loop and must
+cover any affected code or test sections.
+
+## Adapt subagent leases to project scale and timeouts
+
+Before initializing every iteration, let the state machine inspect `structure/` only to classify
+project scale. Explicit `PROJECT_SCALE: SIMPLE|NON_SIMPLE` wins; otherwise file count, total size,
+and structural-node heuristics determine the result. Never use structure content to make
+requirements, architecture, or code decisions.
+
+If structure is empty, keep the base thresholds for the first iteration. For a non-simple
+project, the initializer multiplies the product/requirements, technical-design, code-plan,
+test-design, and implementation thresholds by 1.5. Every work order records its exact timeout
+and expiry.
+
+When a real timeout occurs, `abandon --timed-out` updates
+`HARNOVE_HOME/timeout-policy.json`, expands every stage threshold, and immediately applies the
+new profile to the retry and later iterations. The first timeout adds 50%, the second adds 30%,
+and the third and every later timeout add 10%. Do not mark crashes, ordinary failures, or manual
+cancellations as timeouts.
 
 ## Ask how to branch for every test repair
 
@@ -163,9 +195,10 @@ remains the authoritative index and must still contain the change tree and evide
 
 ## Maintain post-completion project structure knowledge
 
-Treat `HARNOVE_HOME/structure/` as project-owned post-completion abstraction, not as an input
-to requirements, technical design, or code planning. Use Markdown by default and HTML only
-when necessary. During summary, inspect the completed live repository and update structure so
+Treat `HARNOVE_HOME/structure/` as project-owned post-completion abstraction. Before init, it
+may be inspected only for the scale classification described above; it is never an architecture
+or design input. Use Markdown by default and HTML only when necessary. During summary, inspect
+the completed live repository and update structure so
 it covers functional modules, code framework, and structure definitions/relationships with
 file or symbol evidence. Declare `STRUCTURE_STATUS: UPDATED`. Never package or publish
 structure records as Harnove core files.
@@ -176,7 +209,8 @@ Require every subagent to read the iteration's `00-input/*经验复用上下文.
 experience, and explain why irrelevant guidance does not apply. On successful summary
 submission, Harnove writes an immutable experience record under `HARNOVE_HOME/improve/`.
 Future iterations automatically snapshot the accumulated records. Never package, publish,
-or include `iterations/`, `improve/`, `structure/`, or `custom/` in product Git evidence when iterating Harnove itself.
+or include `iterations/`, `improve/`, `structure/`, `custom/`, or `timeout-policy.json` in
+product Git evidence when iterating Harnove itself.
 
 ## Apply project custom instructions
 

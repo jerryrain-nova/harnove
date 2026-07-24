@@ -18,6 +18,13 @@ STAGES = ["prd_intake", "technical_design", "code_plan", "test_design", "impleme
 GATED = {"technical_design", "code_plan", "test_design"}
 REVIEW_GATED = GATED | {"prd_intake"}
 VERSIONED_DOCUMENT_STAGES = REVIEW_GATED
+SIZE_SENSITIVE_STAGES = {"prd_intake", "technical_design", "code_plan", "test_design", "implementation"}
+DEFAULT_STAGE_TIMEOUT_MINUTES = {
+    "prd_intake": 30, "technical_design": 45, "code_plan": 45, "test_design": 30,
+    "implementation": 60, "test_execution": 45, "summary": 30,
+}
+NON_SIMPLE_TIMEOUT_MULTIPLIER = 1.5
+COMBINED_TEST_SECTIONS = ["测试总览", "测试方案", "覆盖策略", "测试用例", "测试目的", "覆盖矩阵"]
 DIRS = {
     "prd_intake": "00-input",
     "technical_design": "01-technical-design",
@@ -39,7 +46,7 @@ CN_NAMES = {
 REQUIRED_SECTIONS = {
     "prd_intake": ["文档总览", "版本核心差异", "原始需求描述", "目标与背景", "用户与场景", "功能需求", "非功能需求", "范围内", "范围外", "验收标准", "约束与依赖", "信息补充记录", "待确认问题", "用户补充记录"],
     "technical_design": ["方案总览", "版本核心差异", "需求依据", "实时代码架构依据", "目标与非目标", "现状分析", "技术方案", "功能变更树", "架构与流程图", "风险", "回滚", "追溯矩阵"],
-    "code_plan": ["变更总览", "版本核心差异", "需求依据", "实时代码架构依据", "改动范围", "改动细则", "代码变更树", "改动关系图", "改动原因", "禁止改动", "追溯矩阵"],
+    "code_plan": ["变更总览", "版本核心差异", "需求依据", "实时代码架构依据", "改动规模判断", "改动范围", "改动细则", "代码变更树", "改动关系图", "改动原因", "禁止改动", "追溯矩阵"],
     "test_design": ["测试总览", "版本核心差异", "需求依据", "覆盖策略", "测试用例", "测试目的", "覆盖矩阵"],
     "implementation": ["需求依据", "批准基线", "实际改动", "Git 证据", "方案偏差"],
     "test_execution": ["需求依据", "实际变更审查", "可执行测试", "执行结果", "结论"],
@@ -50,6 +57,105 @@ PLACEHOLDER = "<!-- 待填写；所有判断须引用 REQ-xxx 或代码证据。
 
 def now() -> str:
     return dt.datetime.now(dt.timezone.utc).astimezone().isoformat(timespec="seconds")
+
+
+def timeout_policy_path(home: Path) -> Path:
+    return home / "timeout-policy.json"
+
+
+def timeout_increase_rate(timeout_count: int) -> float:
+    if timeout_count == 1:
+        return 0.5
+    if timeout_count == 2:
+        return 0.3
+    return 0.1
+
+
+def load_timeout_policy(home: Path) -> dict:
+    path = timeout_policy_path(home)
+    if not path.is_file():
+        return {"schema_version": 1, "timeout_count": 0, "learned_multiplier": 1.0, "history": []}
+    policy = json.loads(path.read_text(encoding="utf-8"))
+    policy.setdefault("schema_version", 1)
+    policy.setdefault("timeout_count", 0)
+    policy.setdefault("learned_multiplier", 1.0)
+    policy.setdefault("history", [])
+    return policy
+
+
+def save_timeout_policy(home: Path, policy: dict) -> None:
+    path = timeout_policy_path(home)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(policy, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def assess_project_scale(structure_root: Path) -> dict:
+    files = structure_files(structure_root)
+    if not files:
+        return {
+            "scale": "unknown", "reason": "structure 为空，首次运行沿用基础阈值",
+            "file_count": 0, "total_bytes": 0, "structural_nodes": 0, "structure_hashes": {},
+        }
+    texts = [path.read_text(encoding="utf-8", errors="replace") for path in files]
+    combined = "\n".join(texts)
+    explicit_non_simple = bool(re.search(r"PROJECT_SCALE\s*:\s*(?:NON_SIMPLE|COMPLEX)", combined, re.IGNORECASE))
+    explicit_simple = bool(re.search(r"PROJECT_SCALE\s*:\s*SIMPLE", combined, re.IGNORECASE))
+    total_bytes = sum(path.stat().st_size for path in files)
+    structural_nodes = len(re.findall(r"(?m)^(?:#{3,6}\s+|[├└]──|\s*[-*]\s+)", combined))
+    non_simple = explicit_non_simple or (
+        not explicit_simple and (len(files) >= 3 or total_bytes >= 12000 or structural_nodes >= 12)
+    )
+    return {
+        "scale": "non_simple" if non_simple else "simple",
+        "reason": (
+            "structure 显式标记或文件数/内容量/结构节点达到非简单项目阈值"
+            if non_simple else "structure 内容低于非简单项目阈值"
+        ),
+        "file_count": len(files), "total_bytes": total_bytes, "structural_nodes": structural_nodes,
+        "structure_hashes": structure_hashes(structure_root),
+    }
+
+
+def build_timeout_profile(home: Path, structure_root: Path) -> dict:
+    policy = load_timeout_policy(home)
+    assessment = assess_project_scale(structure_root)
+    learned = float(policy["learned_multiplier"])
+    stage_minutes = {}
+    for stage, base in DEFAULT_STAGE_TIMEOUT_MINUTES.items():
+        scale_multiplier = NON_SIMPLE_TIMEOUT_MULTIPLIER if (
+            assessment["scale"] == "non_simple" and stage in SIZE_SENSITIVE_STAGES
+        ) else 1.0
+        stage_minutes[stage] = max(1, int(round(base * learned * scale_multiplier)))
+    return {
+        "policy_path": str(timeout_policy_path(home)), "timeout_count": policy["timeout_count"],
+        "learned_multiplier": learned, "project_scale": assessment,
+        "non_simple_multiplier": NON_SIMPLE_TIMEOUT_MULTIPLIER, "stage_minutes": stage_minutes,
+    }
+
+
+def refresh_timeout_profile(state: dict) -> None:
+    state["timeout_profile"] = build_timeout_profile(
+        Path(state["harnove_home"]), Path(state["structure_root"])
+    )
+
+
+def record_timeout_and_expand(state: dict, stage: str, run_id: str) -> dict:
+    home = Path(state["harnove_home"])
+    policy = load_timeout_policy(home)
+    policy["timeout_count"] += 1
+    increase = timeout_increase_rate(policy["timeout_count"])
+    before = float(policy["learned_multiplier"])
+    policy["learned_multiplier"] = round(before * (1.0 + increase), 6)
+    event = {
+        "at": now(), "stage": stage, "run_id": run_id, "timeout_number": policy["timeout_count"],
+        "increase_rate": increase, "before_multiplier": before,
+        "after_multiplier": policy["learned_multiplier"],
+    }
+    policy["history"].append(event)
+    save_timeout_policy(home, policy)
+    refresh_timeout_profile(state)
+    return event
 
 
 def digest(path: Path) -> str:
@@ -109,7 +215,7 @@ def load(archive: Path) -> dict:
     if not path.is_file():
         raise SystemExit(f"找不到状态文件: {path}")
     state = json.loads(path.read_text(encoding="utf-8"))
-    if state.get("schema_version", 1) < 10:
+    if state.get("schema_version", 1) < 11:
         _, _, discovered_improve, discovered_structure, discovered_custom, discovered_home, discovered_branch_pattern = project_defaults()
         inferred_home = archive.parent.parent.resolve()
         migration_home = Path(discovered_home) if inside(archive, Path(discovered_home)) else inferred_home
@@ -141,6 +247,7 @@ def load(archive: Path) -> dict:
         elif state.get("implementation_branch"):
             state.setdefault("initial_implementation_branch", state["implementation_branch"])
         state.setdefault("repair_branch_decisions", [])
+        state.setdefault("design_mode", "separate")
         if state.get("stage") in {"structure_analysis", "structure_refresh"}:
             if state.get("status") == "subagent_working":
                 raise SystemExit("旧迭代正停留在已移除的 structure 阶段；请用原版本结束该子 Agent 后再升级")
@@ -148,10 +255,12 @@ def load(archive: Path) -> dict:
             state["version"] = state.get("stage_versions", {}).get(state["stage"], 0) + 1
             state.setdefault("stage_versions", {})[state["stage"]] = state["version"]
             state["status"] = "awaiting_dispatch"
-        state.setdefault("history", []).append({"at": now(), "action": "schema_migration", "from": old_schema, "to": 10})
+        if not state.get("timeout_profile"):
+            refresh_timeout_profile(state)
+        state.setdefault("history", []).append({"at": now(), "action": "schema_migration", "from": old_schema, "to": 11})
         if state.get("status") == "drafting":
             state["status"] = "awaiting_dispatch"
-        state["schema_version"] = 10
+        state["schema_version"] = 11
         if not state.get("improvement_index") and (archive / "00-input").is_dir():
             state["improvement_index"] = create_improvement_context(archive, state)
         if not state.get("custom_index") and (archive / "00-input").is_dir():
@@ -181,6 +290,9 @@ def capture_git_evidence(archive: Path, state: dict) -> list[str]:
     for excluded in [Path(state["archive"]).parent, Path(state["improve_root"]), Path(state["structure_root"]), Path(state["custom_root"])]:
         if inside(excluded, repo):
             scope.append(f":(exclude){excluded.resolve().relative_to(repo).as_posix()}/**")
+    learned_timeout_policy = timeout_policy_path(Path(state["harnove_home"]))
+    if inside(learned_timeout_policy, repo):
+        scope.append(f":(exclude){learned_timeout_policy.resolve().relative_to(repo).as_posix()}")
     commands = {
         f"git-head-v{version:03d}.txt": ("rev-parse", "HEAD"),
         f"git-status-v{version:03d}.txt": ("status", "--short", *scope),
@@ -299,6 +411,12 @@ def template(state: dict, stage: str, version: int) -> str:
     ]
     if stage in {"technical_design", "code_plan"}:
         lines += ["- 表达格式：`PRESENTATION_FORMAT: MD`", ""]
+    if stage == "code_plan":
+        lines += [
+            "- 设计模式：`DESIGN_MODE: UNDECIDED`",
+            "- 改动规模：`CHANGE_SCOPE: UNDECIDED`",
+            "",
+        ]
     for section in REQUIRED_SECTIONS[stage]:
         initial = PLACEHOLDER
         if section == "版本核心差异" and version == 1:
@@ -316,12 +434,20 @@ def template(state: dict, stage: str, version: int) -> str:
     return "\n".join(lines)
 
 
+def required_sections_for(stage: str, text: str = "") -> list[str]:
+    sections = list(REQUIRED_SECTIONS[stage])
+    if stage == "code_plan" and "DESIGN_MODE: COMBINED" in text:
+        sections.extend(section for section in COMBINED_TEST_SECTIONS if section not in sections)
+    return sections
+
+
 def validate_artifact(path: Path, stage: str, state: dict | None = None, last_run: dict | None = None) -> list[str]:
     if not path.is_file():
         return [f"缺少产物: {path}"]
     text = path.read_text(encoding="utf-8")
-    errors = [f"缺少章节: {s}" for s in REQUIRED_SECTIONS[stage] if f"## {s}" not in text]
-    positions = [text.find(f"## {section}") for section in REQUIRED_SECTIONS[stage]]
+    required_sections = required_sections_for(stage, text)
+    errors = [f"缺少章节: {s}" for s in required_sections if f"## {s}" not in text]
+    positions = [text.find(f"## {section}") for section in required_sections]
     if all(position >= 0 for position in positions) and positions != sorted(positions):
         errors.append("文档章节顺序不符合契约；总览和版本差异必须位于细则之前")
     if "REQ-" not in text:
@@ -345,7 +471,7 @@ def validate_artifact(path: Path, stage: str, state: dict | None = None, last_ru
             difference_position = text.find("## 版本核心差异")
             evolution_position = text.find("## 版本演进摘要")
             detail_position = min(
-                position for heading in REQUIRED_SECTIONS[stage][2:]
+                position for heading in required_sections[2:]
                 if (position := text.find(f"## {heading}")) >= 0
             )
             if evolution_position < 0:
@@ -397,6 +523,29 @@ def validate_artifact(path: Path, stage: str, state: dict | None = None, last_ru
             reason = re.search(r"DIAGRAM_STATUS: NOT_APPLICABLE[\s\S]*?理由[:：]\s*([^\n]+)", text)
             if not reason or len(reason.group(1).strip()) < 20:
                 errors.append("NOT_APPLICABLE 必须给出至少 20 字的具体理由")
+    if stage == "code_plan":
+        combined = "DESIGN_MODE: COMBINED" in text
+        separate = "DESIGN_MODE: SEPARATE" in text
+        small = "CHANGE_SCOPE: SMALL" in text
+        regular = "CHANGE_SCOPE: REGULAR" in text
+        if combined == separate:
+            errors.append("代码方案必须且只能声明 DESIGN_MODE: COMBINED 或 SEPARATE")
+        if small == regular:
+            errors.append("代码方案必须且只能声明 CHANGE_SCOPE: SMALL 或 REGULAR")
+        scale = section_text(text, "改动规模判断")
+        files = re.search(r"AFFECTED_FILES\s*:\s*(\d+)", scale)
+        modules = re.search(r"AFFECTED_MODULES\s*:\s*(\d+)", scale)
+        cross_boundary = re.search(r"CROSS_BOUNDARY_CHANGE\s*:\s*(YES|NO)", scale)
+        if not files or not modules or not cross_boundary:
+            errors.append("改动规模判断必须记录 AFFECTED_FILES、AFFECTED_MODULES 和 CROSS_BOUNDARY_CHANGE")
+        elif combined and (
+            not small or int(files.group(1)) > 3 or int(modules.group(1)) > 1 or cross_boundary.group(1) != "NO"
+        ):
+            errors.append("合并设计只适用于最多 3 个文件、1 个模块且无跨边界变更的小范围改动")
+        elif separate and small:
+            errors.append("CHANGE_SCOPE: SMALL 时必须合并代码方案与测试方案")
+        if combined and len(section_text(text, "测试方案")) < 60:
+            errors.append("合并设计中的测试方案过短，必须说明测试边界、执行方式和失败处理")
     if stage == "summary" and state is not None:
         current = structure_hashes(Path(state["structure_root"]))
         before = (last_run or {}).get("structure_before", {})
@@ -587,15 +736,22 @@ def cmd_init(a: argparse.Namespace) -> None:
         (archive / folder).mkdir(parents=True, exist_ok=True)
     baseline = git(repo, "rev-parse", "HEAD")
     state = {
-        "schema_version": 10, "iteration_id": ident, "iteration_name": iteration_name, "requirement": req,
+        "schema_version": 11, "iteration_id": ident, "iteration_name": iteration_name, "requirement": req,
         "default_branch_pattern": getattr(a, "branch_pattern", "tmp/{iteration_name}-{implementation_version}"),
         "archive": str(archive), "repo": str(repo), "harnove_home": str(home),
         "improve_root": str(improve_root), "structure_root": str(structure_root), "custom_root": str(custom_root), "git_baseline": baseline,
         "created_at": now(), "history": [], "approved": {}, "test_cycles": 0,
         "stage_versions": {stage: 0 for stage in STAGES}, "used_agent_ids": [],
         "implementation_branch": None, "initial_implementation_branch": None, "repair_branch_decisions": [],
+        "design_mode": "separate",
     }
     structure_root.mkdir(parents=True, exist_ok=True)
+    state["timeout_profile"] = build_timeout_profile(home, structure_root)
+    state["history"].append({
+        "at": now(), "action": "project_scale_assessment",
+        **state["timeout_profile"]["project_scale"],
+        "stage_timeout_minutes": state["timeout_profile"]["stage_minutes"],
+    })
     state["improvement_index"] = create_improvement_context(archive, state)
     state["custom_index"] = create_custom_context(archive, state)
 
@@ -648,6 +804,11 @@ def cmd_dispatch(a: argparse.Namespace) -> None:
         raise SystemExit("已有子 Agent 租约，拒绝并发派发")
     run_id = uuid.uuid4().hex
     stage, version = state["stage"], state["version"]
+    refresh_timeout_profile(state)
+    timeout_minutes = state["timeout_profile"]["stage_minutes"][stage]
+    expires_at = (
+        dt.datetime.now(dt.timezone.utc).astimezone() + dt.timedelta(minutes=timeout_minutes)
+    ).isoformat(timespec="seconds")
     branch_record = None
     created_new_branch = False
     if stage == "implementation":
@@ -754,6 +915,8 @@ def cmd_dispatch(a: argparse.Namespace) -> None:
     work_order = {
         "run_id": run_id, "agent_id": a.agent_id, "orchestrator": a.orchestrator,
         "stage": stage, "version": version, "created_at": now(),
+        "timeout_minutes": timeout_minutes, "expires_at": expires_at,
+        "timeout_profile": state["timeout_profile"],
         "artifact": str(artifact_path(archive, state)), "repo": state["repo"],
         "prd_snapshot": state.get("prd_snapshot") or state.get("original_input_snapshot"),
         "improvement_context": str(archive / "00-input" / state["improvement_index"]),
@@ -779,6 +942,7 @@ def cmd_dispatch(a: argparse.Namespace) -> None:
             "开始当前环节前读取项目自定义上下文，遵守 user.md 约束并复用 self.md 经验",
             "需求、技术和代码方案不得把 structure 作为架构输入；必须直接检查当前仓库代码",
             "技术方案和代码方案必须引用本次实时读取的文件或符号证据",
+            "代码方案必须基于实时代码证据判断改动规模；小范围改动合并代码与测试方案并产出同一文件",
             "文档 v002 及以后新增版本演进摘要，按当前版本到 v001 倒序精简记录轨迹；不得回写任何历史版本文件",
             "测试修复必须遵守用户归档的分支决策：reuse 复用当前实现分支，new 从当前实现分支创建并切换新分支",
             "summary 环节依据完成后的当前代码更新 structure 抽象，覆盖功能模块、代码框架、结构定义和关系",
@@ -786,6 +950,19 @@ def cmd_dispatch(a: argparse.Namespace) -> None:
             "不得执行其他环节的工作，不得复用本次子 Agent 身份",
         ],
     }
+    if stage == "code_plan":
+        work_order["code_plan_mode_contract"] = {
+            "small_change_limits": {
+                "maximum_affected_files": 3, "maximum_affected_modules": 1,
+                "cross_boundary_change": "NO",
+                "forbidden_characteristics": [
+                    "public_contract_change", "data_schema_change", "migration", "cross_boundary_change",
+                ],
+            },
+            "combined_markers": ["CHANGE_SCOPE: SMALL", "DESIGN_MODE: COMBINED"],
+            "separate_markers": ["CHANGE_SCOPE: REGULAR", "DESIGN_MODE: SEPARATE"],
+            "required_combined_sections": COMBINED_TEST_SECTIONS,
+        }
     if branch_record:
         work_order["implementation_branch"] = branch_record
     runs = archive / "agent-runs"
@@ -798,7 +975,12 @@ def cmd_dispatch(a: argparse.Namespace) -> None:
     except FileExistsError as exc:
         order_path.unlink(missing_ok=True)
         raise SystemExit("已有子 Agent 租约，拒绝并发派发") from exc
-    state["active_agent"] = {"run_id": run_id, "agent_id": a.agent_id, "work_order": str(order_path.relative_to(archive)), "started_at": now(), "structure_before": work_order["structure_before"]}
+    state["active_agent"] = {
+        "run_id": run_id, "agent_id": a.agent_id,
+        "work_order": str(order_path.relative_to(archive)), "started_at": now(),
+        "timeout_minutes": timeout_minutes, "expires_at": expires_at,
+        "structure_before": work_order["structure_before"],
+    }
     if branch_record:
         state["active_agent"]["implementation_branch"] = branch_record
     if created_new_branch:
@@ -833,6 +1015,12 @@ def cmd_agent_complete(a: argparse.Namespace) -> None:
     active = state.get("active_agent") or {}
     if state["status"] != "subagent_working" or active.get("run_id") != a.run_id:
         raise SystemExit("run-id 与当前活跃子 Agent 不匹配")
+    expires_at = active.get("expires_at")
+    if (
+        a.result != "abandoned" and expires_at
+        and dt.datetime.now(dt.timezone.utc) > dt.datetime.fromisoformat(expires_at).astimezone(dt.timezone.utc)
+    ):
+        raise SystemExit("子 Agent 租约已过期；必须执行 abandon --timed-out 归档超时并扩大全阶段阈值")
     if not a.evidence.strip():
         raise SystemExit("子 Agent 完成记录必须提供 --evidence")
     record = {"at": now(), "action": "subagent_complete", "stage": state["stage"], "version": state["version"], "run_id": a.run_id, "agent_id": active["agent_id"], "result": a.result, "evidence": a.evidence.strip(), "structure_before": active.get("structure_before", {})}
@@ -848,6 +1036,23 @@ def cmd_agent_complete(a: argparse.Namespace) -> None:
 
 
 def cmd_abandon(a: argparse.Namespace) -> None:
+    archive = Path(a.archive).resolve()
+    state = load(archive)
+    active = state.get("active_agent") or {}
+    if state["status"] != "subagent_working" or active.get("run_id") != a.run_id:
+        raise SystemExit("run-id 与当前活跃子 Agent 不匹配")
+    if not (archive / "agent-runs" / "active.lease").is_file():
+        raise SystemExit("子 Agent 活跃租约缺失")
+    if getattr(a, "timed_out", False):
+        expires_at = active.get("expires_at")
+        if not expires_at or (
+            dt.datetime.now(dt.timezone.utc)
+            < dt.datetime.fromisoformat(expires_at).astimezone(dt.timezone.utc)
+        ):
+            raise SystemExit("当前租约尚未到期，不得使用 --timed-out 扩大项目阈值")
+        timeout_event = record_timeout_and_expand(state, state["stage"], a.run_id)
+        state["history"].append({"at": now(), "action": "timeout_policy_expanded", **timeout_event})
+        save(archive, state)
     a.result = "abandoned"
     a.evidence = a.reason
     cmd_agent_complete(a)
@@ -855,7 +1060,11 @@ def cmd_abandon(a: argparse.Namespace) -> None:
 
 def cmd_status(a: argparse.Namespace) -> None:
     archive, state = Path(a.archive).resolve(), load(Path(a.archive).resolve())
-    keys = ["iteration_id", "iteration_name", "requirement", "prd_source_type", "stage", "version", "status", "test_cycles", "implementation_branch", "delivery_branch", "pending_repair_branch_decision", "active_agent"]
+    keys = [
+        "iteration_id", "iteration_name", "requirement", "prd_source_type", "stage", "version",
+        "status", "test_cycles", "design_mode", "timeout_profile", "implementation_branch",
+        "delivery_branch", "pending_repair_branch_decision", "active_agent",
+    ]
     payload = {k: state.get(k) for k in keys}
     payload["next_action"] = {
         "awaiting_dispatch": "spawn_fresh_subagent_then_dispatch",
@@ -869,6 +1078,14 @@ def cmd_status(a: argparse.Namespace) -> None:
         "awaiting_repair_branch_decision": "ask_user_reuse_or_create_repair_branch",
         "complete": "none",
     }.get(state["status"], "inspect_state")
+    active = state.get("active_agent") or {}
+    if state["status"] == "subagent_working" and active.get("expires_at"):
+        payload["lease_expired"] = (
+            dt.datetime.now(dt.timezone.utc)
+            >= dt.datetime.fromisoformat(active["expires_at"]).astimezone(dt.timezone.utc)
+        )
+        if payload["lease_expired"]:
+            payload["next_action"] = "abandon_expired_subagent_with_timed_out"
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     if state["status"] != "complete":
         print(f"产物: {artifact_path(archive, state)}")
@@ -975,6 +1192,11 @@ def cmd_submit(a: argparse.Namespace) -> None:
         cmd_status(argparse.Namespace(archive=str(archive)))
         return
     event = {"at": now(), "action": "submit", "stage": stage, "version": state["version"], "artifact": str(path.relative_to(archive)), "sha256": digest(path)}
+    if stage == "code_plan":
+        text = path.read_text(encoding="utf-8")
+        state["design_mode"] = "combined" if "DESIGN_MODE: COMBINED" in text else "separate"
+        event["design_mode"] = state["design_mode"]
+        event["change_scope"] = "small" if "CHANGE_SCOPE: SMALL" in text else "regular"
     if stage in {"technical_design", "code_plan"} and "PRESENTATION_FORMAT: HTML" in path.read_text(encoding="utf-8"):
         html = path.with_suffix(".html")
         event["html_sidecar"] = {"artifact": str(html.relative_to(archive)), "sha256": digest(html)}
@@ -1135,11 +1357,12 @@ def cmd_review(a: argparse.Namespace) -> None:
     review_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     state["history"].append({**record, "action": "human_review", "record": str(review_path.relative_to(archive))})
     if a.decision == "approve":
-        state["approved"][stage] = {
+        approval = {
             "version": version, "artifact": str(path.relative_to(archive)), "sha256": digest(path),
             "reviewer": reviewer, "human_confirmation": human_confirmation,
             "review_record": str(review_path.relative_to(archive)),
         }
+        state["approved"][stage] = approval
         if "html_sidecar" in record:
             state["approved"][stage]["html_sidecar"] = record["html_sidecar"]
         if stage == "prd_intake":
@@ -1147,7 +1370,28 @@ def cmd_review(a: argparse.Namespace) -> None:
             state["prd_sha256"] = digest(path)
             create_requirement_baseline(archive, state)
         state.pop("approved_change_preview", None)
-        advance(state)
+        if stage == "code_plan" and state.get("design_mode") == "combined":
+            state["approved"]["test_design"] = {
+                **approval, "combined_with": "code_plan",
+                "artifact_role": "代码方案与测试方案合并文档",
+            }
+            state.setdefault("skipped_stages", []).append({
+                "stage": "test_design", "reason": "approved_combined_code_test_design",
+                "artifact": approval["artifact"], "sha256": approval["sha256"],
+                "review_record": approval["review_record"], "at": now(),
+            })
+            state["history"].append({
+                "at": now(), "action": "combined_design_approved",
+                "stage": "code_plan", "version": version,
+                "skipped_stage": "test_design", "artifact": approval["artifact"],
+                "sha256": approval["sha256"], "review_record": approval["review_record"],
+            })
+            state["stage"] = "implementation"
+            state["version"] = state["stage_versions"].get("implementation", 0) + 1
+            state["stage_versions"]["implementation"] = state["version"]
+            state["status"] = "awaiting_dispatch"
+        else:
+            advance(state)
     else:
         state["pending_document_change"] = {
             "stage": stage, "version": version, "artifact": str(path.relative_to(archive)),
@@ -1173,7 +1417,9 @@ def cmd_change_preview(a: argparse.Namespace) -> None:
     sections = [item.strip() for item in a.sections.split(",") if item.strip()]
     if not sections:
         raise SystemExit("必须通过 --sections 列出将发生变化的文档部分")
-    unknown_sections = [item for item in sections if item not in REQUIRED_SECTIONS[state["stage"]]]
+    reviewed_text = artifact_path(archive, state).read_text(encoding="utf-8")
+    allowed_sections = required_sections_for(state["stage"], reviewed_text)
+    unknown_sections = [item for item in sections if item not in allowed_sections]
     if unknown_sections:
         raise SystemExit("变更影响包含不存在的文档章节: " + ", ".join(unknown_sections))
     if not summary or len(summary.strip()) < 40:
@@ -1258,7 +1504,7 @@ def parser() -> argparse.ArgumentParser:
     x = sub.add_parser("status"); x.add_argument("--archive", required=True); x.set_defaults(func=cmd_status)
     x = sub.add_parser("dispatch"); x.add_argument("--archive", required=True); x.add_argument("--agent-id", required=True); x.add_argument("--orchestrator", required=True); x.add_argument("--branch", help="实施阶段使用的用户指定分支名；省略时使用 tmp/{迭代名称}-{实施轮次}"); x.set_defaults(func=cmd_dispatch)
     x = sub.add_parser("agent-complete"); x.add_argument("--archive", required=True); x.add_argument("--run-id", required=True); x.add_argument("--result", required=True, choices=["succeeded", "failed"]); x.add_argument("--evidence", required=True); x.set_defaults(func=cmd_agent_complete)
-    x = sub.add_parser("abandon"); x.add_argument("--archive", required=True); x.add_argument("--run-id", required=True); x.add_argument("--reason", required=True); x.set_defaults(func=cmd_abandon)
+    x = sub.add_parser("abandon"); x.add_argument("--archive", required=True); x.add_argument("--run-id", required=True); x.add_argument("--reason", required=True); x.add_argument("--timed-out", action="store_true", help="标记为真实超时，并按项目级策略扩大全阶段子 Agent 阈值"); x.set_defaults(func=cmd_abandon)
     x = sub.add_parser("submit"); x.add_argument("--archive", required=True); x.add_argument("--result", choices=["needs-clarification", "ready", "passed", "failed"]); x.set_defaults(func=cmd_submit)
     x = sub.add_parser("repair-branch-decision"); x.add_argument("--archive", required=True); x.add_argument("--strategy", required=True, choices=["reuse", "new"]); x.add_argument("--responder", required=True); x.add_argument("--branch", help="strategy=new 时可指定精确修复分支；省略则使用默认分支规则"); x.set_defaults(func=cmd_repair_branch_decision)
     x = sub.add_parser("clarify"); x.add_argument("--archive", required=True); x.add_argument("--responder", required=True)

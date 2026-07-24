@@ -18,6 +18,12 @@ context before acting. Requirements, technical design, and code planning inspect
 repository and never read `structure/` as architecture input. Update structure abstraction
 only during summary after tests pass.
 
+Before each iteration, allow the state machine to inspect `structure/` only for project-scale
+classification and adaptive lease selection. Respect each work order's `timeout_minutes` and
+`expires_at`. For a real timeout, use `abandon --timed-out`; do not use that flag for crashes or
+ordinary failures. The resulting project-level timeout increase applies to retries and later
+iterations.
+
 Treat any text supplied after `/harnove` as either a PRD path or a natural-language iteration
 request. Before initialization, propose a concise branch-safe iteration name and require the
 user to accept it or provide another. Preserve any supplied PRD as immutable, create a separate candidate PRD, and require
@@ -34,6 +40,12 @@ preview until the user explicitly approves it; only then create the next version
 fresh child. Every reviewed document puts a concise overview and previous-version differences
 before details. Version v002 and later add a summarized evolution ordered from the current
 version through v001; never modify historical artifacts to retrofit that section.
+
+In `code_plan`, classify the live-code change scope. For at most three files in one module with
+no public-contract, schema, migration, or cross-boundary change, produce one
+`DESIGN_MODE: COMBINED` code-and-test design artifact. Present that complete artifact for one
+explicit human approval; approval freezes it for both roles and advances directly to
+implementation. Otherwise keep code plan and test design separate.
 
 After every failed test, stop and ask whether the user wants to repair on the current
 implementation branch or create a new repair branch. Do not dispatch before recording the choice.
