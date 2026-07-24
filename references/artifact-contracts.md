@@ -192,8 +192,16 @@ each decision immutably under `reviews/`, and ask again after every later failed
 
 ## Human review contract
 
-Approval freezes the named artifact version as downstream baseline. Rejection requires
-actionable feedback and enters the feedback-impact confirmation loop without changing the
-version. The next version is created only after the user approves that impact preview. Review
-records contain reviewer, timestamp, decision, artifact hash, and feedback; they are never edited
-or deleted.
+Candidate PRD (the product/requirements plan), technical design, code plan, and test design all
+require explicit human approval of the complete current artifact. Validators, child completion,
+silence, missing feedback, or an Agent's own assessment never authorize the next stage. The main
+Agent must present the artifact and wait.
+
+Approval requires `--human-confirmation` containing the user's exact approval wording. The main
+Agent must not invent, infer, or paraphrase this evidence. Approval freezes the named artifact
+version as downstream baseline and stores reviewer, exact human confirmation, immutable review
+record path, artifact hash, and version in that baseline. Rejection requires actionable feedback
+and enters the feedback-impact confirmation loop without changing the version. The next version
+is created only after the user approves that impact preview. Review records contain reviewer,
+timestamp, decision, artifact hash, feedback, and human confirmation; they are never edited or
+deleted.

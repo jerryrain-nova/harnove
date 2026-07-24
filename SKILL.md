@@ -82,7 +82,17 @@ Feedback enters the document-change preview loop below; it does not create a ver
   reusable experience, and summarize rules learned from user feedback. Structure abstraction
   happens only here.
 
-Candidate PRD, technical design, code plan, and test design require real human approval.
+Candidate PRD (the product/requirements plan), technical design, code plan, and test design
+require real human approval. After submitting any of these artifacts, present the complete
+artifact to the user and stop. Passing validators, subagent completion, silence, lack of
+feedback, or the main Agent's quality judgment never counts as approval. Only after the user
+explicitly approves the complete current version may the main Agent run:
+
+`review --decision approve --reviewer <human> --human-confirmation <exact-user-approval-text>`
+
+Preserve the user's approval wording exactly; never invent, infer, or paraphrase it. Do not
+dispatch the next stage until this command has recorded the approval and the state machine has
+advanced.
 
 ## Ask how to branch for every test repair
 

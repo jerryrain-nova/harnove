@@ -1,6 +1,6 @@
 {
   "name": "harnove",
-  "version": "5.2.0",
+  "version": "5.2.1",
   "config_schema_version": 5,
   "version_policy": {
     "fix_or_optimization": "increment_patch_c",

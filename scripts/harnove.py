@@ -862,8 +862,8 @@ def cmd_status(a: argparse.Namespace) -> None:
         "subagent_working": "monitor_subagent",
         "ready_for_submit": "orchestrator_submit",
         "awaiting_user_clarification": "ask_user_then_clarify",
-        "awaiting_prd_review": "human_review",
-        "awaiting_human_review": "human_review",
+        "awaiting_prd_review": "wait_for_explicit_human_review",
+        "awaiting_human_review": "wait_for_explicit_human_review",
         "awaiting_change_preview": "orchestrator_explain_document_changes",
         "awaiting_change_confirmation": "human_confirm_or_revise_change_preview",
         "awaiting_repair_branch_decision": "ask_user_reuse_or_create_repair_branch",
@@ -1110,12 +1110,24 @@ def cmd_review(a: argparse.Namespace) -> None:
         raise SystemExit("当前没有等待人工审核的闸门")
     if state["stage"] == "prd_intake":
         validate_original_input(archive, state)
+    reviewer = a.reviewer.strip()
+    human_confirmation = getattr(a, "human_confirmation", "").strip()
+    if not reviewer:
+        raise SystemExit("人工审核必须提供非空的 --reviewer")
     if a.decision == "reject" and not a.feedback.strip():
         raise SystemExit("驳回必须提供可执行的 --feedback")
     if a.decision == "approve" and a.feedback.strip():
         raise SystemExit("带反馈的审核不能直接批准；请使用 reject 进入变更影响确认流程")
+    if a.decision == "approve" and len(human_confirmation) < 2:
+        raise SystemExit("批准必须通过 --human-confirmation 归档用户明确批准的原文；主 Agent 不得自行判断通过")
+    if a.decision == "reject" and human_confirmation:
+        raise SystemExit("驳回不能同时提供 --human-confirmation")
     stage, version, path = state["stage"], state["version"], artifact_path(archive, state)
-    record = {"at": now(), "reviewer": a.reviewer, "decision": a.decision, "stage": stage, "version": version, "artifact": str(path.relative_to(archive)), "sha256": digest(path), "feedback": a.feedback.strip()}
+    record = {
+        "at": now(), "reviewer": reviewer, "decision": a.decision, "stage": stage,
+        "version": version, "artifact": str(path.relative_to(archive)), "sha256": digest(path),
+        "feedback": a.feedback.strip(), "human_confirmation": human_confirmation,
+    }
     if stage in {"technical_design", "code_plan"} and "PRESENTATION_FORMAT: HTML" in path.read_text(encoding="utf-8"):
         html = path.with_suffix(".html")
         record["html_sidecar"] = {"artifact": str(html.relative_to(archive)), "sha256": digest(html)}
@@ -1123,7 +1135,11 @@ def cmd_review(a: argparse.Namespace) -> None:
     review_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     state["history"].append({**record, "action": "human_review", "record": str(review_path.relative_to(archive))})
     if a.decision == "approve":
-        state["approved"][stage] = {"version": version, "artifact": str(path.relative_to(archive)), "sha256": digest(path)}
+        state["approved"][stage] = {
+            "version": version, "artifact": str(path.relative_to(archive)), "sha256": digest(path),
+            "reviewer": reviewer, "human_confirmation": human_confirmation,
+            "review_record": str(review_path.relative_to(archive)),
+        }
         if "html_sidecar" in record:
             state["approved"][stage]["html_sidecar"] = record["html_sidecar"]
         if stage == "prd_intake":
@@ -1249,7 +1265,7 @@ def parser() -> argparse.ArgumentParser:
     response = x.add_mutually_exclusive_group(required=True); response.add_argument("--response"); response.add_argument("--response-file"); x.set_defaults(func=cmd_clarify)
     x = sub.add_parser("customize"); x.add_argument("--archive", required=True); x.add_argument("--target", choices=["user", "self"], default="user"); x.add_argument("--mode", choices=["append", "replace"], default="append"); x.add_argument("--actor", required=True)
     custom_content = x.add_mutually_exclusive_group(required=True); custom_content.add_argument("--content"); custom_content.add_argument("--content-file"); x.set_defaults(func=cmd_customize)
-    x = sub.add_parser("review"); x.add_argument("--archive", required=True); x.add_argument("--decision", required=True, choices=["approve", "reject"]); x.add_argument("--reviewer", required=True); x.add_argument("--feedback", default=""); x.set_defaults(func=cmd_review)
+    x = sub.add_parser("review"); x.add_argument("--archive", required=True); x.add_argument("--decision", required=True, choices=["approve", "reject"]); x.add_argument("--reviewer", required=True); x.add_argument("--feedback", default=""); x.add_argument("--human-confirmation", default="", help="decision=approve 时必须原样记录用户明确批准文本"); x.set_defaults(func=cmd_review)
     x = sub.add_parser("change-preview"); x.add_argument("--archive", required=True); x.add_argument("--orchestrator", required=True); x.add_argument("--sections", required=True, help="逗号分隔的受影响章节")
     preview_content = x.add_mutually_exclusive_group(required=True); preview_content.add_argument("--summary"); preview_content.add_argument("--summary-file"); x.set_defaults(func=cmd_change_preview)
     x = sub.add_parser("change-decision"); x.add_argument("--archive", required=True); x.add_argument("--decision", required=True, choices=["approve", "revise"]); x.add_argument("--reviewer", required=True); x.add_argument("--feedback", default=""); x.set_defaults(func=cmd_change_decision)
