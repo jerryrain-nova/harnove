@@ -16,7 +16,7 @@ advance. Keep all iteration, experience, project-structure, and custom data unde
 Harnove directory. Require children to read the frozen `custom/user.md` and `custom/self.md`
 context before acting. Requirements, technical design, and code planning inspect the live
 repository and never read `structure/` as architecture input. Update structure abstraction
-only during summary after tests pass.
+only during summary—after tests pass in expert mode, or after implementation in agile mode.
 
 Before each iteration, allow the state machine to inspect `structure/` only for project-scale
 classification and adaptive lease selection. Respect each work order's `timeout_minutes` and
@@ -25,12 +25,23 @@ ordinary failures. The resulting project-level timeout increase applies to retri
 iterations.
 
 Treat any text supplied after `/harnove` as either a PRD path or a natural-language iteration
-request. Before initialization, propose a concise branch-safe iteration name and require the
-user to accept it or provide another. Preserve any supplied PRD as immutable, create a separate candidate PRD, and require
-explicit user approval of that candidate before technical design. If no usable input is supplied, report current status when an archive is identifiable;
+request. Before initialization, propose a concise branch-safe iteration name, ask the user to
+choose expert or agile mode, and require explicit confirmation of both. Pass the selection
+through `--mode expert|agile`; omitted legacy calls default to expert. Preserve any supplied PRD
+as immutable, create a separate candidate PRD, and require
+explicit user approval before the selected mode's next design stage. If no usable input is supplied, report current status when an archive is identifiable;
 otherwise ask only for the iteration ID, confirmed iteration name, requirement name, and either a PRD or a requirement
 description. For natural language, draft the candidate PRD and actively clarify material
-ambiguities according to the canonical skill before technical design begins.
+ambiguities according to the canonical skill before design begins.
+
+Expert mode keeps the canonical full sequence. Agile mode uses only
+`prd_intake → code_plan → implementation → summary`: after requirements are clarified and
+the complete READY baseline receives one explicit approval confirming both clarification
+completion and baseline approval, produce a live-code-based `DESIGN_MODE: AGILE` code plan without modifying
+code, run the same feedback-preview and human approval loop, then reuse the expert branch and
+implementation behavior. After implementation, skip all test stages and summarize immediately,
+updating structure/improve/custom and presenting actual `代码改动点`. Never let agile routing
+change an expert iteration or create expert-only stages in agile state.
 
 At every reviewed document gate (candidate PRD, technical design, code plan, and test design),
 feedback is a proposal rather than permission to rewrite. Do not create a new version or start a
@@ -41,20 +52,20 @@ fresh child. Every reviewed document puts a concise overview and previous-versio
 before details. Version v002 and later add a summarized evolution ordered from the current
 version through v001; never modify historical artifacts to retrofit that section.
 
-In `code_plan`, classify the live-code change scope. For at most three files in one module with
+In expert-mode `code_plan`, classify the live-code change scope. For at most three files in one module with
 no public-contract, schema, migration, or cross-boundary change, produce one
 `DESIGN_MODE: COMBINED` code-and-test design artifact. Present that complete artifact for one
 explicit human approval; approval freezes it for both roles and advances directly to
 implementation. Otherwise keep code plan and test design separate.
 
-After every failed test, stop and ask whether the user wants to repair on the current
+After every expert-mode failed test, stop and ask whether the user wants to repair on the current
 implementation branch or create a new repair branch. Do not dispatch before recording the choice.
 For reuse, switch back to the current branch. For new, create the requested or default per-version
 branch from the current branch; it then becomes the branch for testing and delivery. Both choices
 require a fresh repair child, and every later test failure repeats the question.
 
 Never approve a human gate on the user's behalf and never invent scope beyond the PRD. For the
-candidate PRD/product plan, technical design, code plan, and test design, show the complete
+candidate PRD and code plan in both modes, plus expert technical and test design, show the complete
 current artifact and wait for explicit user approval. Validation success, child completion,
 silence, or your own quality judgment is not approval. After the user approves, preserve the
 exact user wording with `review --decision approve --reviewer <human>

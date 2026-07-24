@@ -199,8 +199,8 @@ def main() -> None:
     print(f"自适应超时策略: {install_root / 'timeout-policy.json'}（首次真实超时后创建）")
     print(f"项目自定义上下文: {custom_root}")
     print(f"使用文档: {install_root / 'USAGE.md'}")
-    print("下一步: 先由 Agent 建议迭代名称并由用户确认。")
-    print(f"确认后运行: {install_root / 'run.ps1'} init --iteration-id <ID> --iteration-name <用户确认名称> --requirement <需求标识> (--prd <路径> | --description <描述>)")
+    print("下一步: 先由 Agent 建议迭代名称，并由用户确认名称及 expert|agile 模式。")
+    print(f"确认后运行: {install_root / 'run.ps1'} init --mode <expert|agile> --iteration-id <ID> --iteration-name <用户确认名称> --requirement <需求标识> (--prd <路径> | --description <描述>)")
     print("运行后由主 Agent 为每个环节派发全新的隔离子 Agent。")
 
 

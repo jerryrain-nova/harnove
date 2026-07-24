@@ -31,6 +31,22 @@ These directories do not belong to the product source or clean Harnove distribut
 Every stage/version uses a new subagent identity and one-time run lease containing
 `timeout_minutes` and `expires_at`.
 
+## Workflow mode contract
+
+Initialization records exactly one immutable iteration mode:
+
+- `expert` (default for backward compatibility):
+  `prd_intake → technical_design → code_plan → test_design → implementation → test_execution → summary`.
+- `agile`:
+  `prd_intake → code_plan → implementation → summary`.
+
+The orchestrator asks the user to choose before init and passes `--mode expert|agile`. Old states
+migrate to `expert`. Agile state must never create versions, work orders, approvals, or artifacts
+for technical design, test design, or test execution. Expert routing and validations remain
+unchanged by agile rules. Both modes enforce fresh children, custom context, adaptive leases,
+explicit document approval, implementation branches, Git evidence, summary structure updates,
+and experience persistence.
+
 ## Project-scale and adaptive-timeout contract
 
 At iteration initialization, inspect existing `structure/` only for project-scale
@@ -99,6 +115,12 @@ Use `PRD_STATUS: NEEDS_CLARIFICATION` while material ambiguity remains and
 rejection is immutable but produces a new version only after its change preview is approved. A ready PRD requires explicit human
 approval; only the approved version/hash becomes downstream scope.
 
+In agile mode, this is the requirements-clarification stage rather than a separate product-design
+stage. After the READY artifact is presented, use one explicit human review whose exact wording
+confirms both that all boundaries and ambiguities are resolved and that the current complete
+requirement baseline is approved. Store it as `agile_requirements_confirmation`; there is no
+second implicit completeness gate. Only then advance directly to code planning.
+
 ### Technical design
 
 Start with `方案总览` and `版本核心差异`; v002 and later then add `版本演进摘要`. Include goals/non-goals, current architecture
@@ -132,6 +154,12 @@ migration, or cross-boundary change. In this mode, append `测试总览`, `测�
 `测试用例`, `测试目的`, and `覆盖矩阵` to the same authoritative file. Otherwise use
 `CHANGE_SCOPE: REGULAR` and `DESIGN_MODE: SEPARATE`.
 
+In agile mode, preserve the same live-code, file/module/symbol, rationale, boundary, prohibited
+change, diagram, change-tree, and traceability quality, but use `DESIGN_MODE: AGILE` and
+`CHANGE_SCOPE: AGILE`. The agile code-plan child writes only the artifact and must not modify
+product code. Its explicit human approval advances directly to implementation. Expert-only
+combined code/test markers and test content do not apply.
+
 Technical design and code-plan Markdown declare `PRESENTATION_FORMAT: MD` by default. Use
 `HTML` only when necessary for precision and provide a same-name `.html` sidecar of at least
 500 bytes. Markdown remains authoritative and retains the overview and change tree.
@@ -146,6 +174,7 @@ For a validated combined small-change artifact, this content lives in the code-p
 separate test-design version or child is created. One explicit human approval freezes that same
 path and hash as both the code-plan and test-design baselines, then advances directly to
 implementation. A combined document remains one human review gate, not an implicit approval.
+This entire stage is expert-only.
 
 ### Implementation record and branch
 
@@ -165,13 +194,24 @@ results, logs/evidence, failures and diagnoses, regression scope, coverage recon
 an unambiguous `passed` or `failed` conclusion. A failure identifies the owning requirement or
 change and actionable implementation feedback.
 
+Test execution and test-repair routing are expert-only. Agile mode does not create a test report
+or claim that independent tests ran.
+
 ### Final summary and structure abstraction
 
 Include background, approved decisions, actual changes, test conclusion, deploy/rollback
-notes, residual risks, complete traceability, and 1-10 evidence-based scores for design,
-planning, testing, implementation, execution, and workflow. Include `根因`, `经验总结`,
+notes, residual risks, and complete traceability. Expert mode uses 1-10 evidence-based scores
+for design, planning, testing, implementation, execution, and workflow. Agile mode scores only
+requirements clarification, code planning, implementation, summary, and workflow; mark omitted
+expert-only stages `N/A` without inventing numeric evidence. Include `根因`, `经验总结`,
 `下次复用规则`, and `用户反馈经验` with exactly one
 `FEEDBACK_EXPERIENCE_STATUS: CAPTURED|NONE`.
+
+In agile mode, `测试结论` explicitly states that the selected workflow has no independent test
+stage; it must not fabricate passed test evidence. Add `代码改动点` summarizing actual changed
+files, symbols, behavior, scope deviations, and relevant Git evidence for presentation to the
+user. Agile implementation submission records its implementation branch as the delivery branch
+and advances directly to summary.
 
 During summary, inspect the completed current repository and update `structure/`
 with an abstract current-project view. It must cover `功能模块`, `代码框架`, and
@@ -212,6 +252,8 @@ run. Rejection feedback alone does not permit a new child.
 
 ## Test-repair branch decision contract
 
+This contract applies only to expert mode.
+
 The first implementation dispatch creates and records the current implementation branch using
 the user rule when supplied or the configured default otherwise. Every failed test enters
 `awaiting_repair_branch_decision`; no repair work order or child may start until the user chooses.
@@ -225,7 +267,7 @@ each decision immutably under `reviews/`, and ask again after every later failed
 
 ## Human review contract
 
-Candidate PRD (the product/requirements plan), technical design, code plan, and test design all
+Candidate PRDs and code plans in both modes, plus technical and test designs in expert mode,
 require explicit human approval of the complete current artifact. Validators, child completion,
 silence, missing feedback, or an Agent's own assessment never authorize the next stage. The main
 Agent must present the artifact and wait.

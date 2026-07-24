@@ -65,6 +65,7 @@ def main() -> None:
         run(str(exported / "init.py"), "--project", str(target))
         assert (target / ".harnove" / "config.json").is_file()
         assert (target / ".harnove" / "runtime" / "harnove.py").is_file()
+        assert (target / ".harnove" / "README.md").is_file()
         assert (target / ".harnove" / "iterations").is_dir()
         assert (target / ".harnove" / "improve").is_dir()
         assert (target / ".harnove" / "structure").is_dir()

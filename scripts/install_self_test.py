@@ -47,6 +47,7 @@ def main() -> None:
         assert not (project / "custom").exists()
         assert (project / ".harnove" / "skill" / "harnove" / "SKILL.md").is_file()
         assert (project / ".harnove" / "runtime" / "harnove.py").is_file()
+        assert (project / ".harnove" / "README.md").is_file()
         assert (project / ".agents" / "skills" / "harnove" / "SKILL.md").is_file()
         assert (project / ".claude" / "skills" / "harnove" / "SKILL.md").is_file()
         assert (project / ".cursor" / "commands" / "harnove.md").is_file()
@@ -73,8 +74,15 @@ def main() -> None:
         archives = list((project / ".harnove" / "iteration-records").glob("*_ITER-001_portable"))
         assert len(archives) == 1
         installed_state = json.loads((archives[0] / "state.json").read_text(encoding="utf-8"))
+        assert installed_state["workflow_mode"] == "expert"
         assert installed_state["timeout_profile"]["project_scale"]["scale"] == "unknown"
         assert installed_state["timeout_profile"]["stage_minutes"]["implementation"] == 60
+        run(str(runtime), "init", "--mode", "agile", "--iteration-id", "ITER-AGILE",
+            "--iteration-name", "portable-agile", "--requirement", "portable-agile",
+            "--description", "验证敏捷模式安装入口。", cwd=Path(temp))
+        agile_archive = next((project / ".harnove" / "iteration-records").glob("*_ITER-AGILE_portable-agile"))
+        agile_state = json.loads((agile_archive / "state.json").read_text(encoding="utf-8"))
+        assert agile_state["workflow_mode"] == "agile"
 
         # A user-modified managed file blocks an update unless force is explicit.
         installed_skill = project / ".harnove" / "skill" / "harnove" / "SKILL.md"
@@ -94,6 +102,7 @@ def main() -> None:
         assert (copied_plugin / "config.json").is_file()
         assert (copied_plugin / "runtime" / "harnove.py").is_file()
         assert (copied_plugin / "skill" / "harnove" / "SKILL.md").is_file()
+        assert (copied_plugin / "README.md").is_file()
         assert (copied_plugin / "iterations").is_dir()
         assert (copied_plugin / "improve").is_dir()
         assert (copied_plugin / "structure").is_dir()
