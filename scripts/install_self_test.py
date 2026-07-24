@@ -85,7 +85,7 @@ def main() -> None:
         agile_state = json.loads((agile_archive / "state.json").read_text(encoding="utf-8"))
         assert agile_state["workflow_mode"] == "agile"
         assert {path.name for path in agile_archive.iterdir() if path.is_dir()} == {
-            "00-input", "02-code-plan", "04-implementation", "06-summary", "reviews", "agent-runs",
+            "00-input", "02-code-plan", "04-implementation", "reviews", "agent-runs",
         }
         assert (agile_archive / "00-input" / "clarifications").is_dir()
         assert not any((agile_archive / folder).exists() for folder in [
