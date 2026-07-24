@@ -90,7 +90,8 @@ def submit(archive: Path, result: str | None = None, branch: str | None = None) 
 
 def review(archive: Path, decision: str, feedback: str = "") -> None:
     harnove.cmd_review(argparse.Namespace(
-        archive=str(archive), decision=decision, reviewer="smoke-human", feedback=feedback
+        archive=str(archive), decision=decision, reviewer="smoke-human", feedback=feedback,
+        human_confirmation="人工明确批准当前完整文档" if decision == "approve" else "",
     ))
 
 
@@ -264,6 +265,19 @@ def test_existing_prd(root: Path) -> Path:
     approve_document_change(archive, "补充批量导出的范围依据", "权限边界也应纳入变更影响说明")
     run_subagent(archive, intake_writer("READY", "无（边界已确认）", "已按审核意见补充。"))
     harnove.cmd_submit(argparse.Namespace(archive=str(archive), result="ready"))
+    before_human_approval = harnove.load(archive)
+    try:
+        harnove.cmd_review(argparse.Namespace(
+            archive=str(archive), decision="approve", reviewer="smoke-human",
+            feedback="", human_confirmation="",
+        ))
+        raise AssertionError("document advanced without explicit human approval evidence")
+    except SystemExit as exc:
+        assert "--human-confirmation" in str(exc)
+    after_missing_confirmation = harnove.load(archive)
+    assert after_missing_confirmation["stage"] == before_human_approval["stage"]
+    assert after_missing_confirmation["version"] == before_human_approval["version"]
+    assert after_missing_confirmation["status"] == before_human_approval["status"]
     review(archive, "approve")
 
     assert harnove.load(archive)["stage"] == "technical_design"
@@ -298,6 +312,16 @@ def test_existing_prd(root: Path) -> Path:
     harnove.cmd_submit(argparse.Namespace(archive=str(archive), result=None)); review(archive, "approve")
     submit(archive); review(archive, "approve")
     submit(archive); review(archive, "approve")
+    reviewed_state = harnove.load(archive)
+    assert set(harnove.REVIEW_GATED) <= set(reviewed_state["approved"])
+    for reviewed_stage in harnove.REVIEW_GATED:
+        approval = reviewed_state["approved"][reviewed_stage]
+        assert approval["reviewer"] == "smoke-human"
+        assert approval["human_confirmation"] == "人工明确批准当前完整文档"
+        review_record = archive / approval["review_record"]
+        assert review_record.is_file()
+        review_payload = json.loads(review_record.read_text(encoding="utf-8"))
+        assert review_payload["human_confirmation"] == "人工明确批准当前完整文档"
     assert not harnove.structure_files(Path(harnove.load(archive)["structure_root"]))
     submit(archive)
     implementation_state = harnove.load(archive)
@@ -438,7 +462,7 @@ def test_schema8_branch_migration(root: Path) -> None:
 
 def main() -> None:
     package = json.loads((Path(__file__).resolve().parent.parent / "harnove-package.json").read_text(encoding="utf-8"))
-    assert version_policy.expected(version_policy.parse("5.1.1"), "feature") == version_policy.parse(package["version"])
+    assert version_policy.expected(version_policy.parse("5.2.0"), "fix") == version_policy.parse(package["version"])
     with tempfile.TemporaryDirectory(prefix="harnove-") as tmp, redirect_stdout(StringIO()):
         root = Path(tmp)
         improvement = test_existing_prd(root)

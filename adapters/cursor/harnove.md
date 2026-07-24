@@ -41,4 +41,10 @@ For reuse, switch back to the current branch. For new, create the requested or d
 branch from the current branch; it then becomes the branch for testing and delivery. Both choices
 require a fresh repair child, and every later test failure repeats the question.
 
-Never approve a human gate on the user's behalf and never invent scope beyond the PRD.
+Never approve a human gate on the user's behalf and never invent scope beyond the PRD. For the
+candidate PRD/product plan, technical design, code plan, and test design, show the complete
+current artifact and wait for explicit user approval. Validation success, child completion,
+silence, or your own quality judgment is not approval. After the user approves, preserve the
+exact user wording with `review --decision approve --reviewer <human>
+--human-confirmation <exact-user-approval-text>`; never infer or paraphrase it, and never advance
+before the state machine records it.
