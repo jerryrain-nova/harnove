@@ -63,7 +63,60 @@ def fill_current(archive: Path) -> None:
         )
     if state["stage"] in {"technical_design", "code_plan"}:
         text += "\nDIAGRAM_STATUS: INCLUDED\n\n```mermaid\nflowchart LR\n  A[输入] --> B[处理]\n  B --> C[输出]\n```\n"
+    if state["stage"] == "code_plan":
+        text = text.replace("DESIGN_MODE: UNDECIDED", "DESIGN_MODE: SEPARATE")
+        text = text.replace("CHANGE_SCOPE: UNDECIDED", "CHANGE_SCOPE: REGULAR")
+        text = text.replace(
+            "## 改动规模判断\n\n",
+            "## 改动规模判断\n\nAFFECTED_FILES: 5\nAFFECTED_MODULES: 2\n"
+            "CROSS_BOUNDARY_CHANGE: YES\n\n依据实时文件与符号检查，本次变更跨越多个模块，代码方案与测试方案保持独立审核。\n\n",
+        )
     text += "\n" + ("REQ-001 的范围证据、实现约束与验证说明。" * 40) + "\n"
+    path.write_text(text, encoding="utf-8")
+
+
+def fill_combined_code_plan(archive: Path) -> None:
+    fill_current(archive)
+    state = harnove.load(archive)
+    assert state["stage"] == "code_plan"
+    path = harnove.artifact_path(archive, state)
+    text = path.read_text(encoding="utf-8")
+    text = text.replace("DESIGN_MODE: SEPARATE", "DESIGN_MODE: COMBINED")
+    text = text.replace("CHANGE_SCOPE: REGULAR", "CHANGE_SCOPE: SMALL")
+    text = text.replace("AFFECTED_FILES: 5", "AFFECTED_FILES: 2")
+    text = text.replace("AFFECTED_MODULES: 2", "AFFECTED_MODULES: 1")
+    text = text.replace("CROSS_BOUNDARY_CHANGE: YES", "CROSS_BOUNDARY_CHANGE: NO")
+    text = text.replace(
+        "依据实时文件与符号检查，本次变更跨越多个模块，代码方案与测试方案保持独立审核。",
+        "依据实时文件与符号检查，本次只改动同一模块内两个文件，不改变公共契约、数据结构或跨模块边界，适合合并设计与审核。",
+    )
+    text += """
+## 测试总览
+
+REQ-001：测试集中验证同一模块内两个文件的局部行为，覆盖正常、边界与失败路径，并复用现有测试入口。
+
+## 测试方案
+
+REQ-001：使用现有单元测试与模块级集成测试验证改动，不引入跨模块环境；失败时保留日志并打回同一实现分支修复，所有强制用例必须通过。
+
+## 覆盖策略
+
+REQ-001：覆盖主要输入、空输入、权限拒绝和依赖异常，确认未改动的公共接口行为保持稳定。
+
+## 测试用例
+
+REQ-001：用例一验证正常结果；用例二验证边界；用例三验证依赖失败时返回既有错误语义。
+
+## 测试目的
+
+REQ-001：证明局部实现满足需求且不会越过批准范围或破坏同模块既有行为。
+
+## 覆盖矩阵
+
+| 需求 | 代码范围 | 用例 | 预期 |
+| --- | --- | --- | --- |
+| REQ-001 | 同模块两个文件 | 正常/边界/失败 | 全部强制用例通过 |
+"""
     path.write_text(text, encoding="utf-8")
 
 
@@ -239,6 +292,8 @@ def test_existing_prd(root: Path) -> Path:
     archive = next((root / "iterations").glob("*_SMOKE-001_state-machine"))
     state = harnove.load(archive)
     assert state["status"] == "awaiting_dispatch"
+    assert state["timeout_profile"]["project_scale"]["scale"] == "unknown"
+    assert state["timeout_profile"]["stage_minutes"] == harnove.DEFAULT_STAGE_TIMEOUT_MINUTES
     assert (root / "custom" / "user.md").is_file()
     assert (root / "custom" / "self.md").is_file()
     initial_custom = archive / "00-input" / state["custom_index"]
@@ -408,11 +463,23 @@ def test_existing_prd(root: Path) -> Path:
 
 
 def test_natural_language_reuses_experience(root: Path, improvement: Path) -> None:
+    structure_root = root / "structure"
+    (structure_root / "modules.md").write_text(
+        "# 模块补充\n\n" + "\n".join(f"- 模块 {index}：职责与依赖关系" for index in range(8)),
+        encoding="utf-8",
+    )
+    (structure_root / "relations.md").write_text(
+        "# 关系补充\n\n" + "\n".join(f"- 关系 {index}：模块调用与数据流" for index in range(8)),
+        encoding="utf-8",
+    )
     harnove.cmd_init(ns_init(
         root, "SMOKE-002", "order-export",
         description="给订单页增加批量导出，但格式和数量上限还没确定。",
     ))
     archive = next((root / "iterations").glob("*_SMOKE-002_order-export"))
+    initial_timeout_profile = harnove.load(archive)["timeout_profile"]
+    assert initial_timeout_profile["project_scale"]["scale"] == "non_simple"
+    assert initial_timeout_profile["stage_minutes"]["technical_design"] == 68
     context = archive / "00-input" / harnove.load(archive)["improvement_index"]
     assert improvement.name in context.read_text(encoding="utf-8")
     custom_context = archive / "00-input" / harnove.load(archive)["custom_index"]
@@ -436,8 +503,74 @@ def test_natural_language_reuses_experience(root: Path, improvement: Path) -> No
     state = harnove.load(archive)
     assert state["stage"] == "technical_design" and state["status"] == "awaiting_dispatch"
     harnove.cmd_dispatch(argparse.Namespace(archive=str(archive), agent_id="live-code-design", orchestrator="smoke-main", branch=None))
-    work_order = json.loads((archive / harnove.load(archive)["active_agent"]["work_order"]).read_text(encoding="utf-8"))
+    dispatched_state = harnove.load(archive)
+    work_order = json.loads((archive / dispatched_state["active_agent"]["work_order"]).read_text(encoding="utf-8"))
     assert "structure_context" not in work_order
+    assert work_order["timeout_minutes"] == 68 and work_order["expires_at"]
+    try:
+        harnove.cmd_abandon(argparse.Namespace(
+            archive=str(archive), run_id=dispatched_state["active_agent"]["run_id"],
+            reason="尚未过期", timed_out=True,
+        ))
+        raise AssertionError("active lease was incorrectly recorded as timed out")
+    except SystemExit as exc:
+        assert "尚未到期" in str(exc)
+    dispatched_state["active_agent"]["expires_at"] = "2000-01-01T00:00:00+00:00"
+    harnove.save(archive, dispatched_state)
+    try:
+        harnove.cmd_agent_complete(argparse.Namespace(
+            archive=str(archive), run_id=dispatched_state["active_agent"]["run_id"],
+            result="succeeded", evidence="迟到完成不应被接受。",
+        ))
+        raise AssertionError("expired subagent completion was accepted")
+    except SystemExit as exc:
+        assert "租约已过期" in str(exc)
+    harnove.cmd_abandon(argparse.Namespace(
+        archive=str(archive), run_id=dispatched_state["active_agent"]["run_id"],
+        reason="子 Agent 达到租约时间", timed_out=True,
+    ))
+    expanded = harnove.load(archive)["timeout_profile"]
+    assert expanded["timeout_count"] == 1
+    assert expanded["learned_multiplier"] == 1.5
+    assert expanded["stage_minutes"]["technical_design"] == 101
+    policy = json.loads((root / "timeout-policy.json").read_text(encoding="utf-8"))
+    assert policy["history"][-1]["increase_rate"] == 0.5
+
+    harnove.cmd_init(ns_init(
+        root, "SMOKE-003", "timeout-reuse",
+        description="验证后续迭代复用已经扩大的子 Agent 超时阈值。",
+    ))
+    reused_archive = next((root / "iterations").glob("*_SMOKE-003_timeout-reuse"))
+    reused_profile = harnove.load(reused_archive)["timeout_profile"]
+    assert reused_profile["timeout_count"] == 1
+    assert reused_profile["stage_minutes"]["technical_design"] == 101
+
+
+def test_combined_code_and_test_design(root: Path) -> None:
+    harnove.cmd_init(ns_init(
+        root, "SMOKE-004", "combined-design",
+        description="在单一模块内调整两个文件的局部校验逻辑，不改变公共接口或数据结构。",
+    ))
+    archive = next((root / "iterations").glob("*_SMOKE-004_combined-design"))
+    run_subagent(archive, intake_writer("READY", "无（边界已确认）", "范围已明确。"))
+    harnove.cmd_submit(argparse.Namespace(archive=str(archive), result="ready"))
+    review(archive, "approve")
+    submit(archive)
+    review(archive, "approve")
+    run_subagent(archive, fill_combined_code_plan)
+    harnove.cmd_submit(argparse.Namespace(archive=str(archive), result=None))
+    state = harnove.load(archive)
+    assert state["stage"] == "code_plan" and state["design_mode"] == "combined"
+    combined_path = harnove.artifact_path(archive, state)
+    combined_sha = harnove.digest(combined_path)
+    review(archive, "approve")
+    state = harnove.load(archive)
+    assert state["stage"] == "implementation" and state["status"] == "awaiting_dispatch"
+    assert state["stage_versions"]["test_design"] == 0
+    assert state["approved"]["code_plan"]["artifact"] == state["approved"]["test_design"]["artifact"]
+    assert state["approved"]["code_plan"]["sha256"] == combined_sha
+    assert state["approved"]["test_design"]["combined_with"] == "code_plan"
+    assert state["skipped_stages"][-1]["stage"] == "test_design"
 
 
 def test_schema8_branch_migration(root: Path) -> None:
@@ -454,7 +587,7 @@ def test_schema8_branch_migration(root: Path) -> None:
     }
     (archive / "state.json").write_text(json.dumps(state), encoding="utf-8")
     migrated = harnove.load(archive)
-    assert migrated["schema_version"] == 10
+    assert migrated["schema_version"] == 11
     assert migrated["initial_implementation_branch"]["name"] == "feature/original"
     assert migrated["implementation_branch"]["name"] == "feature/old-fix"
     assert migrated["repair_branch_decisions"] == []
@@ -462,11 +595,15 @@ def test_schema8_branch_migration(root: Path) -> None:
 
 def main() -> None:
     package = json.loads((Path(__file__).resolve().parent.parent / "harnove-package.json").read_text(encoding="utf-8"))
-    assert version_policy.expected(version_policy.parse("5.2.0"), "fix") == version_policy.parse(package["version"])
+    assert version_policy.expected(version_policy.parse("5.2.1"), "feature") == version_policy.parse(package["version"])
+    assert [harnove.timeout_increase_rate(index) for index in range(1, 9)] == [
+        0.5, 0.3, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1,
+    ]
     with tempfile.TemporaryDirectory(prefix="harnove-") as tmp, redirect_stdout(StringIO()):
         root = Path(tmp)
         improvement = test_existing_prd(root)
         test_natural_language_reuses_experience(root, improvement)
+        test_combined_code_and_test_design(root)
         test_schema8_branch_migration(root)
     print("self-test passed")
 

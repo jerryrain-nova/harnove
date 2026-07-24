@@ -73,6 +73,9 @@ def main() -> None:
             "--prd", str(prd), cwd=Path(temp))
         archives = list((project / ".harnove" / "iteration-records").glob("*_ITER-001_portable"))
         assert len(archives) == 1
+        installed_state = json.loads((archives[0] / "state.json").read_text(encoding="utf-8"))
+        assert installed_state["timeout_profile"]["project_scale"]["scale"] == "unknown"
+        assert installed_state["timeout_profile"]["stage_minutes"]["implementation"] == 60
 
         # A user-modified managed file blocks an update unless force is explicit.
         installed_skill = project / ".harnove" / "skill" / "harnove" / "SKILL.md"

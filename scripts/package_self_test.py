@@ -37,6 +37,8 @@ def main() -> None:
         structure_marker.write_text("project-only structure", encoding="utf-8")
         custom_marker = used_harnove / "custom" / "user.md"
         custom_marker.write_text("project-only custom preference", encoding="utf-8")
+        timeout_marker = used_harnove / "timeout-policy.json"
+        timeout_marker.write_text('{"project_only_timeout_policy": true}\n', encoding="utf-8")
         project_config = json.loads((used_harnove / "config.json").read_text(encoding="utf-8"))
         project_config["project_only_marker"] = True
         (used_harnove / "config.json").write_text(
@@ -50,6 +52,7 @@ def main() -> None:
         assert not (exported / "improve").exists()
         assert not (exported / "structure").exists()
         assert not (exported / "custom").exists()
+        assert not (exported / "timeout-policy.json").exists()
         assert not (exported / "config.json").exists()
         assert not (exported / "runtime").exists()
         assert not (exported / "skill").exists()
